@@ -1,0 +1,34 @@
+                    <section class="panel renewal-panel" data-expert-only {% if not expert %}hidden{% endif %}>
+                        <div class="section-heading">
+                            <h2>24/7 · Verbindung erneuern</h2><span class="tag">Standardmäßig aus</span>
+                        </div>
+                        <p class="small muted">Erneuert nur die Verbindung zum Streamingziel. Deine lokalen Quellen,
+                            Wiederholung und Aufnahme laufen weiter. Eine neue Twitch-Sendung erfordert eine Trennung;
+                            Zuschauer können dabei eine Unterbrechung sehen. Kurze Neuverbindungen garantieren keinen
+                            Neustart der 48-Stunden-Frist.</p>
+                        <form id="renewal-form">
+                            <div class="settings-grid inner"><label>Automatisch erneuern<select id="renew-interval">
+                                        <option value="0">Aus · nur manuell</option>
+                                        <option value="300">Alle 5 Minuten · Test</option>
+                                        <option value="600">Alle 10 Minuten · Test</option>
+                                        <option value="1800">Alle 30 Minuten · Test</option>
+                                        <option value="43200">Alle 12 Stunden</option>
+                                        <option value="86400">Alle 24 Stunden</option>
+                                        <option value="129600">Alle 36 Stunden</option>
+                                        <option value="172800">Alle 48 Stunden · bei Twitch 2 Minuten vorher</option>
+                                    </select></label><label>Trennpause<select id="renew-gap">
+                                        <option value="2">2 Sekunden · kurze Neuverbindung</option>
+                                        <option value="5">5 Sekunden</option>
+                                        <option value="10">10 Sekunden</option>
+                                        <option value="30">30 Sekunden</option>
+                                        <option value="95">95 Sekunden · neue Sendung anstoßen</option>
+                                        <option value="120">120 Sekunden</option>
+                                    </select></label></div>
+                            <p class="small muted">Twitch-Disconnect-Schutz kann Trennungen bis zu 90 Sekunden
+                                überbrücken. Eine längere Trennung kann eine neue Sendung bewirken, unterbricht aber die
+                                Zuschauerausgabe. Das ist keine unterbrechungsfreie Umgehung des Twitch-Limits.</p>
+                            <button class="secondary" type="submit">Einstellungen speichern</button><button
+                                class="ghost" disabled="" id="renew-now" type="button">Jetzt neu verbinden</button>
+                        </form>
+                        <p class="small muted" id="renew-note" role="status"></p>
+                    </section>

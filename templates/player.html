@@ -4,14 +4,14 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Vorschau</title>
+    <title>{{viewer ~ ' · Live' if viewer else 'Vorschau'}}</title>
     <link rel="stylesheet" href="/static/player.css">
     <script src="hls.min.js" defer></script>
     <script src="/static/player.js" defer></script>
 </head>
 
 <body><video controls autoplay muted playsinline></video>
-    <p id="message">Warte auf Quelle …</p>
+    <p id="message">{{'Warte auf Live-Programm …' if viewer else 'Warte auf Quelle …'}}</p>
 </body>
 
 </html>

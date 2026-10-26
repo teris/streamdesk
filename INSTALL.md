@@ -17,8 +17,8 @@ ZIP auf den Linux-Server übertragen und dort entpacken:
 ```bash
 apt-get update
 apt-get install -y unzip python3
-unzip StreamDesk-1.0.0.zip
-cd streamdesk
+unzip streamdesk-1.1.0-rc.6.zip
+cd streamdesk-1.1.0-rc.6
 bash install.sh --help
 ```
 
@@ -103,6 +103,10 @@ Standard-UI-Ziel ist `http://SERVER-IP:8080`. Für NPMplus siehe [docs/PROXY.md]
 
 Konten und App-Schlüssel werden nach der Installation in der Administration eingerichtet. Es werden keine Zugangsdaten des früheren Testservers mitgeliefert. Details: [docs/OAUTH.md](docs/OAUTH.md).
 
+## Optional: geschütztes Playback
+
+Ab rc.4 unter **Expertenmodus → Playback** als Administrator aktivieren. Der neue Listener muss auf Loopback liegen; Standard `127.0.0.1:9996`. Optional beim Installieren oder Update `--enable-playback --playback-port 9996` ergänzen. Ohne diesen Schalter werden bestehende Playback-Einstellungen im Attach-/Update-Modus beibehalten. Persönliche Playback-Rechte werden beim Anwendungsabgleich ergänzt; anonyme Archivberechtigungen für den StreamDesk-Namensbereich werden nicht angelegt.
+
 ## 5. Update
 
 Neues Release separat entpacken und darin ausführen:
@@ -111,7 +115,7 @@ Neues Release separat entpacken und darin ausführen:
 sudo bash install.sh --mode update
 ```
 
-Bei abweichenden Ordnern und Dienstnamen dieselben Werte wie bei der Erstinstallation angeben. Beispiel:
+Bei abweichendem Dienstnamen `--service-name` angeben. Der Datenordner wird aus der vorhandenen Env-Datei übernommen. Ab 1.1.0-rc.2 wird auch der Programmordner gespeichert; bei älteren Installationen mit eigenem Programmordner diesen weiter ausdrücklich angeben. Beispiel:
 
 ```bash
 sudo bash install.sh --mode update \
@@ -123,6 +127,41 @@ sudo bash install.sh --mode update \
 Öffentliche Adresse und Endpunkte werden aus `/etc/<dienstname>.env` übernommen. Benutzer, Medien, Schlüssel und Auswahl bleiben erhalten. Der UI-Dienst wird während des Updates neu gestartet; laufende Streams und Aufnahmen können dadurch unterbrochen werden. Im geplanten Wartungsfenster aktualisieren.
 
 Der Update-Modus gilt für Installationen aus diesem Release-Installer. Eine frühere individuelle Entwicklungsversion mit unbenannten Root-Pfaden oder ohne Installationsdatei sollte gesichert und manuell migriert bzw. frisch installiert werden.
+
+### Datenbank gelöscht: neue Instanz an bestehendem MediaMTX
+
+Wenn `attach` eine bestehende Installation meldet und `update` keine Datenbank findet, sind typischerweise Env-Datei, Unit oder MediaMTX-Einträge übrig geblieben. Ein normales Update kann die gelöschten Konten nicht wiederherstellen. Für den bisherigen Zustand müssen `app.db`, `fernet.key` und `session.key` aus einer zusammengehörigen Sicherung zurückgespielt werden.
+
+Für einen ausdrücklich gewünschten **Neuanfang mit neuer Datenbank und neuen Zugangsdaten** das neue Paket entpacken und darin ausführen:
+
+```bash
+sudo bash install.sh --mode attach --recover \
+  --public-url https://stream.example.com \
+  --ingest-host ingest.example.com \
+  --mediamtx-config /opt/mediamtx/mediamtx.yml \
+  --mediamtx-binary /opt/mediamtx/mediamtx \
+  --mediamtx-service mediamtx
+```
+
+`--dry-run` kann zum Prüfen ergänzt werden; dabei werden keine Dateien, Dienste oder Pakete geändert. `--mode update --recover` verwendet denselben Wiederaufsetzungsweg. `--recover` ist ausschließlich bei fehlender Datenbank möglich, nicht mit `standalone`.
+
+Dabei geschieht Folgendes:
+
+1. Vorhandene Env-Werte und derselbe MediaMTX-Namensbereich werden übernommen. Abweichende Daten- oder MediaMTX-Konfigurationspfade werden abgelehnt, damit nicht versehentlich die falsche Instanz zurückgesetzt wird.
+2. Der UI-Dienst wird gestoppt; Konfiguration, Anwendung, Unit und vorhandene Schlüssel werden privat unter `/var/backups/streamdesk/` gesichert.
+3. Ein verbliebener Datenordner wird neben den bisherigen Pfad verschoben, beispielsweise nach `/var/lib/streamdesk-before-recovery-<zeitpunkt>-<kennung>`. Auch Medien, Schlüssel und SQLite-Journaldateien bleiben dort erhalten. Die Sicherung enthält eine `recovery.json` mit diesem Pfad. Große Dateien werden dafür nicht kopiert.
+4. Nachweisbar eigene verwaiste MediaMTX-Pfade und Konten werden entfernt und ein neuer StreamDesk-Administrator eingerichtet. Ohne passende Env-Datei müssen bestehende Pfade über ihre reservierten StreamDesk-Medienkonten zuordenbar sein; ein unbekannter belegter Namensbereich wird weiterhin abgelehnt.
+5. Neue Zugangsdaten werden ausschließlich in `/var/lib/streamdesk/initial-login.txt` abgelegt. MediaMTX-Binary, bestehende MediaMTX-Unit und fremde Streams/Konten werden nicht ersetzt. Der separate native Aufnahmebereich bleibt erhalten.
+
+Bei einem Installationsfehler werden vorherige Konfiguration und Datenreste wiederhergestellt. Ein späterer erneuter Aufruf mit vorhandener neuer Datenbank ist ein normales `--mode update`; `--recover` überschreibt diese Datenbank nicht.
+
+Nach erfolgreicher Neuinstallation:
+
+```bash
+sudo cat /var/lib/streamdesk/initial-login.txt
+```
+
+Plattformkonten, Streamschlüssel und Benutzer müssen neu eingerichtet werden. Dateien aus dem archivierten Datenordner werden nicht automatisch einer neuen Datenbank zugeordnet; benötigte Videos lassen sich erneut hochladen. Alte Schlüssel nicht in die neue Instanz kopieren.
 
 ## Erweiterte Parameter
 
@@ -139,3 +178,7 @@ Der Update-Modus gilt für Installationen aus diesem Release-Installer. Eine fr�
 Vor Änderungen entstehen private Sicherungen unter `/var/backups/streamdesk/`. Gesichert werden Konfiguration, App-Quellcode, Env-Datei sowie bei Updates die Datenbank und Verschlüsselungsschlüssel; große Mediendateien werden nicht kopiert. Bei einem Installationsfehler wird der vorherige Konfigurations-/Anwendungsstand wiederhergestellt. Die Sicherung bleibt zur Kontrolle erhalten. Systempakete und das Python-Environment werden dabei nicht automatisch zurückgesetzt; Hinweise dazu stehen im Betriebsleitfaden.
 
 Logs und Wiederherstellungsschritte stehen in [docs/OPERATIONS.md](docs/OPERATIONS.md). Ein erneuter Neuinstallationsaufruf überschreibt keine vorhandene Datenbank.
+
+## Umstieg auf rc.6
+
+Das normale `--mode update` erhält Benutzer, Schlüssel, Medien und tatsächlich konfigurierte zusätzliche Quellen/Ausgänge. Die Datenbank wird beim Start wiederholbar um Routingtabellen und die dauerhafte Benutzer-ID-Vergabe ergänzt. Es gibt danach für neue Benutzer nur zwei feste Standardquellen; zusätzliche Quellen und Konten werden im Expertenmodus angelegt. Die alte globale Quellenfixierung wird durch Prioritäten je Ausgang ersetzt. Nach dem Update unter „Quellen & Routing“ die übernommenen Zuordnungen prüfen.

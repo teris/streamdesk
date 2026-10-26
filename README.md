@@ -5,22 +5,74 @@ Eine selbst gehostete Mehrbenutzer-Oberfläche für OBS-/Handy-Streams, manuelle
 **MediaMTX - StreamDesk benötigt [MediaMTX](https://github.com/bluenviron/mediamtx).** MediaMTX übernimmt den eigentlichen Medienverkehr. StreamDesk steuert persönliche Eingänge, automatische Quellenwahl und Ausgänge über dessen Control API. Dies ist ein eigenständiges Community-Projekt und kein offizieller Bestandteil von MediaMTX, Twitch oder YouTube.
 
 ```text
-OBS (Source 1) ───┐                       ┌─ Twitch
-Handy (Source 2) ─┼─ MediaMTX / StreamDesk ─┼─ YouTube
-Offline-Video ────┘                       └─ eigener Anbieter
+Standard: Source 1 → Source 2 → Offline
+          └── Twitch / YouTube / eigener Anbieter
+
+Expertenmodus: zusätzliche Quellen und Konten
+              └── pro Ausgang eigene Quellenzuordnung und Priorität
 ```
 
 ## Funktionen
 
+- Eigener Expertenmodus mit Untermenüs für technische MediaMTX-Einstellungen und zusätzlicher serverseitiger Prüfung; nach jeder neuen Anmeldung ausgeschaltet. Globale MediaMTX-Einstellungen benötigen zusätzlich Administratorrechte.
+- Quellen und Prioritäten pro Ausgang, einzelne Streamingziele starten/stoppen, WebRTC-Kamera/-Vorschau, native segmentierte Aufnahmen und widerrufbare öffentliche HLS-Zuschauer-Links im Expertenmodus.
+- Geschützte zeitversetzte Wiedergabe eigener nativer Aufnahmen, mit optionalem Playback-Server und Ausschnitten bis zu einer Stunde.
+- Helles, dunkles oder System-Theme pro Benutzer sowie mobile Bedienelemente, immer verfügbar.
 - Kompaktes Dashboard mit Empfangs-/Sendedatenrate, aktuellem Programm, eigener Medienbelegung sowie aktueller und gesamter erfasster Sendezeit.
-- Persönliche Konten mit zwei geschützten Eingängen: OBS über RTMP, Handy beispielsweise über SRT. Source 1 hat Vorrang vor Source 2.
-- Persönliche Offline-Videobibliothek: MP4 bis 500 MiB und fünf Minuten, Auswahl, Vorschau und Löschen. Die Offline-Schleife beginnt erst bei verbundenem Ausgang.
+- Persönliche Konten mit zwei festen Standardquellen: Source 1 vor Source 2. Zusätzliche Publish-/öffentliche RTSP-Pull-Quellen werden nur im Expertenmodus angelegt.
+- Persönliche Offline-Videobibliothek: MP4 bis 500 MiB und fünf Minuten, Auswahl, Vorschau und Löschen. Die Offline-Schleife läuft bei Programmvorschau, Programmaufnahme oder aktivem Ausgang.
 - Positionierbare Textbeschriftung und live gerenderte Browser-Overlays, etwa von StreamElements. Der Overlay-Browser liefert Bild und Animationen; dessen Audio wird nicht übernommen.
-- Ausschließlich manuell gestartete Aufnahmen, MP4-Download und einmalige Wiedergabe als Source 1 mit sichtbarem Hinweis „Wiederholung“.
-- Gleichzeitig Twitch, YouTube und/oder ein eigener Streaminganbieter. Die gespeicherte Zielauswahl gilt beim nächsten Start; Konten bleiben beim Abwählen verbunden.
+- Umschaltbare Programmvorschau je Ausgang mit sichtbarem privatem Link im Dashboard; auch ohne Streamingziel verfügbar.
+- Dauerhafter Programmpfad; Programmaufnahmen laufen beim Wechsel zwischen Quellen und Offline-Video weiter.
+- Separate manuell gestartete Aufnahmen, MP4-Download und einmalige Wiedergabe als Source 1 mit sichtbarem Hinweis „Wiederholung“.
+- Standardausgänge Twitch, YouTube und ein eigener Anbieter; im Expertenmodus weitere Konten/Anbieter hinzufügen. Bis zu zehn Quellen und zehn Ausgänge insgesamt. Die gespeicherte Zielauswahl gilt beim nächsten Start; Konten bleiben beim Abwählen verbunden.
 - Optionale Erneuerung der Twitch-Verbindung, während andere Streamingziele verbunden bleiben.
 - Twitch-Titel und Kategorie bearbeiten; YouTube-Konto und eigene Sendung auswählen.
+- Sichtbarer Bereich „Mein Konto“ für den eigenen Passwortwechsel; Administration mit Löschung deaktivierter Konten und separatem Medienarchiv.
 - Gemeinsamer Chat mit gezieltem Senden an Twitch, YouTube oder beide; persönliches, erneuerbares Widget für Browser-Docks und Browserquellen.
+
+## Screenshots
+
+### Dashboard
+
+Streamstatus, umschaltbare Programmvorschau mit privatem Link und gemeinsamer Live-Chat auf einen Blick.
+
+![StreamDesk-Dashboard mit Programmvorschau, Streamstatus und Live-Chat](screenshoots/dashboard.png)
+
+<details>
+<summary>Quellen – getrennte Vorschauen und Verbindungsdaten</summary>
+
+![Quellenübersicht mit getrennten Karten für Source 1 und Source 2](screenshoots/quellen.png)
+
+</details>
+
+<details>
+<summary>Offline-Videos – Bibliothek und Text-Overlays</summary>
+
+![Offline-Videobibliothek mit Videoauswahl und Einstellungen für Text-Overlays](screenshoots/offline.png)
+
+</details>
+
+<details>
+<summary>Aufnahmen – Programm aufzeichnen und Aufnahmen wiederholen</summary>
+
+![Aufnahmeübersicht mit nativen Segmenten und manueller Programmaufnahme](screenshoots/aufnahme.png)
+
+</details>
+
+<details>
+<summary>Chat und Widget – Twitch und YouTube gemeinsam</summary>
+
+![Gemeinsamer Twitch- und YouTube-Chat mit Einstellungen für das Browser-Widget](screenshoots/widget.png)
+
+</details>
+
+<details>
+<summary>Expertenmodus – eigene Untermenüs für technische Einstellungen</summary>
+
+![Expertenmodus mit Untermenüs für Protokolle, Quellen, Routing, Ausgänge, Aufnahme und Playback](screenshoots/experts.png)
+
+</details>
 
 ## Installation
 
@@ -61,10 +113,13 @@ Es gibt kein öffentliches Standardpasswort. Das Administratorkonto wird mit ein
 **Ausführliche Schritte: [INSTALL.md](INSTALL.md).** Weitere Dokumentation:
 
 - [Feature-Übersicht und Roadmap](FEATURE.md)
+- [Expertenmodus und neue Medienfunktionen](docs/EXPERT_MODE.md)
+- [OBS und SRT-Verbindungsprobleme](docs/SRT.md)
 - [Reverse Proxy und NPMplus](docs/PROXY.md)
 - [Twitch- und Google-/YouTube-Kontofreigabe](docs/OAUTH.md)
 - [Konfigurationsvariablen](docs/CONFIGURATION.md)
 - [Betrieb, Updates, Sicherung und Wiederherstellung](docs/OPERATIONS.md)
+- [Neu aufsetzen nach gelöschter Datenbank](INSTALL.md#datenbank-gelöscht-neue-instanz-an-bestehendem-mediamtx)
 - [Mitwirken und Tests](CONTRIBUTING.md)
 - [Prüfbericht zu diesem Release](TESTING.md)
 - [Sicherheit](SECURITY.md)
@@ -78,6 +133,7 @@ Es gibt kein öffentliches Standardpasswort. Das Administratorkonto wird mit ein
 4. „Beim nächsten Stream senden an“ wählen und **Streaming-Auswahl speichern**. Neue Verbindungen aktivieren kein Streamingziel automatisch.
 5. Im Dashboard **Stream starten**. **Stream stoppen** beendet die Weiterleitungen, ohne Kontofreigaben oder Schlüssel zu löschen.
 6. Aufnahmen und Wiederholungen separat und ausschließlich manuell starten.
+7. Für technische Erweiterungen den eigenen Menüpunkt **Expertenmodus** öffnen, den Modus einschalten und **Modus übernehmen**. Die technischen Einstellungen liegen ausschließlich in dessen Untermenüs. Theme und normale Bedienung benötigen ihn nicht.
 
 Jeder Benutzer besitzt eigene Eingänge, Videos, Aufnahmen, Verbindungen und Chat-Widget-Links. Die Administratorverwaltung legt weitere Benutzer an.
 
@@ -86,8 +142,9 @@ Jeder Benutzer besitzt eigene Eingänge, Videos, Aufnahmen, Verbindungen und Cha
 - Eine neue Twitch-Sitzung ist nicht garantiert unterbrechungsfrei. Eine kurze Neuverbindung setzt die Twitch-Grenze von 48 Stunden nicht zuverlässig zurück. Disconnect-Schutz und eine neue Sendung sind unterschiedliche Dinge.
 - API-Kontofreigaben bei Twitch/Google sind für Chat erforderlich. YouTube-Streaming per Schlüssel benötigt keine Google-App. Eine YouTube-Sendung mit deaktiviertem oder beendetem Chat liefert keinen aktiven Chat.
 - Die Anwendung erstellt, veröffentlicht oder beendet keine YouTube-Sendung automatisch über die API. Die Autostart-Einstellungen im YouTube Studio gelten weiterhin.
-- Aufnahmen werden bei Quellabbruch abgeschlossen und nicht automatisch neu gestartet. Bei weniger als 350 MiB freiem Speicher werden sie beendet; zum Start müssen mindestens 500 MiB frei sein.
+- Manuelle MP4-Aufnahmen werden bei Quellabbruch abgeschlossen und nicht automatisch neu gestartet. Bei weniger als 350 MiB freiem Speicher werden sie beendet; zum Start müssen mindestens 500 MiB frei sein. Ausdrücklich aktivierte native MediaMTX-Aufnahmen zeichnen wieder auf, sobald die Quelle verfügbar ist.
 - Browser-Overlays benötigen während ihrer Nutzung Chromium und zusätzliche CPU/RAM. Eine gemeinsame Videoausgabe wird auf die Ziele verteilt; die Upload-Bandbreite steigt mit deren Anzahl.
+- WebRTC benötigt kompatible Browser-/Quellcodecs und einen erreichbaren Medienport. Browser-Kamera-Publish setzt HTTPS voraus. Der Signalisierungsproxy öffnet keine Firewallports automatisch; Einrichtung siehe [Expertenmodus](docs/EXPERT_MODE.md).
 - Der Installer bindet eine **lokale native MediaMTX-Instanz** ein. Eine entfernte Instanz ohne Zugriff auf deren Konfiguration, Docker-exklusive Installationen sowie HTTP-/JWT-Authentifizierung werden in dieser Version nicht automatisch umgebaut.
 
 ## Lizenz und Abhängigkeiten
@@ -95,3 +152,5 @@ Jeder Benutzer besitzt eigene Eingänge, Videos, Aufnahmen, Verbindungen und Cha
 StreamDesk wird unter der [MIT-Lizenz](LICENSE) bereitgestellt. MediaMTX bleibt ein separates Projekt mit eigener MIT-Lizenz. Die YouTube-gRPC-Protokolldefinition und generierter Code beruhen auf Googles Apache-2.0-Beispiel; siehe [NOTICE](NOTICE) und [Lizenztext](LICENSE.youtube-sample.txt). Weitere Laufzeit-Abhängigkeiten stehen in `requirements.txt` und [THIRD_PARTY.md](THIRD_PARTY.md).
 
 Im Release-ZIP sind ausschließlich Quellcode und Dokumentation enthalten: keine Serverdatenbank, Konten, Kennwörter, Streamschlüssel, OAuth-Secrets, privaten Widget-Links oder hochgeladenen Videos.
+
+Die verbindliche Erweiterungsplanung steht in [ROADMAP.md](ROADMAP.md), unabhängig von der Feature-Liste. Die Wellen nach 1.1.0 sind weiterhin Planung.

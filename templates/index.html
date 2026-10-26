@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="de">
+<html lang="de" data-theme="{{user.theme}}" data-expert="{{'true' if expert else 'false'}}">
 
 <head>
     <meta charset="utf-8">
@@ -7,9 +7,13 @@
     <meta name="csrf-token" content="{{csrf}}">
     <meta name="public-url" content="{{public}}">
     <title>Dashboard · MediaMTX - StreamDesk</title>
-    <link rel="stylesheet" href="/static/style.css?v=multi1">
+    <link rel="stylesheet" href="/static/style.css?v=rc6">
+    <link rel="stylesheet" href="/static/features.css?v=rc6">
     <script src="/static/chat.js?v=multi1" defer></script>
-    <script src="/static/app.js?v=multi1" defer></script>
+    <script src="/static/app.js?v=rc6" defer></script>
+    <script src="/static/features.js?v=rc6" defer></script>
+    <script src="/static/expansion.js?v=rc6" defer></script>
+    <script src="/static/routing.js?v=rc6" defer></script>
 </head>
 
 <body class="workspace">
@@ -45,22 +49,21 @@
                     <path d="M4 7h16M4 17h16" />
                     <circle cx="9" cy="7" r="3" />
                     <circle cx="15" cy="17" r="3" />
-                </svg><span>Einstellungen</span></a>{% if user.admin %}<a class="menu-link" href="#administration"><svg
+                </svg><span>Einstellungen</span></a><a class="menu-link" href="#account"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 22v-2a8 8 0 0 1 16 0v2"/></svg><span>Mein Konto</span></a><a class="menu-link" href="#expert"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="m8 4-5 8 5 8M16 4l5 8-5 8M14 3l-4 18" /></svg><span>Expertenmodus</span><small id="expert-menu-state">{{'Aktiv' if expert else 'Aus'}}</small></a>{% if user.admin %}<a class="menu-link" href="#administration"><svg
                     viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
                     <circle cx="9" cy="8" r="3" />
                     <path d="M3 21v-3a6 6 0 0 1 12 0v3M16 5a3 3 0 0 1 0 6M18 15a5 5 0 0 1 3 5" />
                 </svg><span>Administration</span></a>{% endif %}
         </nav>
         <div class="sidebar-bottom"><span class="status-led"></span>
-            <div>Deine Regie steht bereit<small>OBS → Handy → Standby</small></div>
+            <div>Deine Regie steht bereit<small>Live-Quellen → Standby</small></div>
         </div>
     </aside>
     <div class="workspace-shell">
         <header class="workspace-header">
             <div class="breadcrumb">Arbeitsplatz <span>/</span> <strong id="breadcrumb-title">Dashboard</strong></div>
-            <div class="header-account"><span class="connection" id="connection">● Verbinde …</span><span
-                    class="user-avatar" aria-hidden="true">{{user.username[0]|upper}}</span><span
-                    class="username">{{user.username}}</span><button id="logout" class="ghost">Abmelden</button></div>
+            <div class="header-account"><span class="connection" id="connection">● Verbinde …</span><a class="expert-pill" href="#expert" data-expert-only {% if not expert %}hidden{% endif %}>Experte</a><span
+                    class="user-avatar" aria-hidden="true">{{user.username[0]|upper}}</span><a class="username" href="#account">{{user.username}}</a><button id="logout" class="ghost">Abmelden</button></div>
         </header>
         <main id="workspace-main" tabindex="-1">
             <div class="heading">
@@ -77,7 +80,7 @@
                     <article class="metric-card">
                         <div class="metric-label"><span class="metric-icon">↓</span>Empfang</div>
                         <div class="metric-value" id="stat-receive">— <small>Mbit/s</small></div>
-                        <div class="metric-foot">OBS + Handy <svg class="sparkline" viewBox="0 0 120 24"
+                        <div class="metric-foot">Alle Live-Eingänge <svg class="sparkline" viewBox="0 0 120 24"
                                 aria-hidden="true">
                                 <polyline id="receive-line" />
                             </svg></div>
@@ -111,7 +114,7 @@
                             <h2 id="output-state">Status wird geladen</h2>
                         </div>
                         <p class="muted" id="output-description">Verbindung zum Server wird geprüft.</p>
-                        <div class="route"><span id="active-source">—</span><span class="route-line">→</span><span
+                        <div class="route" aria-label="Ausgewählte Programmroute"><span id="active-source">—</span><span class="route-line">→</span><span
                                 id="destination">Twitch</span></div>
                         <div id="destination-health" class="destination-health"></div>
                     </div>
@@ -125,17 +128,19 @@
                         <div class="section-heading">
                             <div>
                                 <div class="eyebrow">PROGRAMM</div>
-                                <h2>Das geht an deinen Ausgang</h2>
+                                <h2>Dein ausgewähltes Programm</h2>
                             </div><span class="tag">Ausgangsvorschau</span>
                         </div>
+                        <label class="program-picker">Programmvorschau<select id="program-select"><option value="main">Standardprogramm · Source 1 &amp; 2</option></select></label>
+                        <p id="program-route" class="small muted"></p>
                         <div class="preview">
                             <div class="placeholder"><span>▣</span>
                                 <p>Vorschau deines fertigen Streams</p>
                             </div><iframe allow="autoplay; fullscreen" hidden="" title="Ausgangsvorschau"></iframe>
                         </div>
+                        <div class="program-link-row"><label>Link zur ausgewählten Programmvorschau<input id="program-link" type="text" readonly></label><button id="program-link-copy" class="ghost" type="button">Link kopieren</button><a id="program-link-open" target="_blank" rel="noopener">Vorschau öffnen ↗</a><a id="program-webrtc-open" target="_blank" rel="noopener" data-expert-only {% if not expert %}hidden{% endif %}>WebRTC mit Ton ↗</a><p class="small muted">Privater Vorschau-Link · Anmeldung erforderlich.</p></div>
                         <div class="source-footer">
-                            <p class="small muted" id="program-hint">Live-Quellen sind auch vor dem Start sichtbar. Ohne
-                                Ausgang bleibt das Offline-Video pausiert.</p><button class="ghost preview-toggle"
+                            <p class="small muted" id="program-hint">Programm und Offline-Video sind auch ohne Streamingziel als Vorschau verfügbar.</p><button class="ghost preview-toggle"
                                 data-slot="3">Vorschau schließen</button>
                         </div>
                     </section>
@@ -223,52 +228,14 @@
                     </div>
                 </div>
                 <div class="dashboard-bottom">
-                    <div class="source-pills"><a href="#sources" id="dash-source1" class="source-pill">● OBS · Prüfe
-                            …</a><a href="#sources" id="dash-source2" class="source-pill">● Handy · Prüfe …</a><span
-                            class="source-pill" id="dash-recording">Keine Aufnahme</span></div><a href="#settings"
+                    <div class="source-pills" id="dashboard-source-pills"><span class="source-pill" id="dash-recording">Keine Aufnahme</span></div><a href="#settings"
                         class="text-link">Ausgang &amp; Verbindung verwalten →</a>
                 </div>
             </section>
             <section class="app-view" data-view="sources" aria-label="Quellen" hidden>
-                <section class="sources">
-                    <article class="panel source" id="source1">
-                        <div class="source-heading">
-                            <div><span class="source-number">01</span>
-                                <h3>OBS</h3>
-                            </div><span class="badge">Prüfe …</span>
-                        </div>
-                        <div class="preview">
-                            <div class="placeholder"><span>▣</span>
-                                <p>Bildvorschau bei Bedarf öffnen</p>
-                            </div><iframe allow="autoplay; fullscreen" hidden="" title="OBS Vorschau"></iframe>
-                        </div>
-                        <div class="source-footer"><span class="rate">— Mbit/s</span><button
-                                class="ghost preview-toggle" data-slot="1">Vorschau öffnen</button></div>
-                        <p class="small muted">Bevorzugte Quelle · RTMP</p>
-                    </article>
-                    <article class="panel source" id="source2">
-                        <div class="source-heading">
-                            <div><span class="source-number">02</span>
-                                <h3>Handy</h3>
-                            </div><span class="badge">Prüfe …</span>
-                        </div>
-                        <div class="preview">
-                            <div class="placeholder"><span>▯</span>
-                                <p>Bildvorschau bei Bedarf öffnen</p>
-                            </div><iframe allow="autoplay; fullscreen" hidden="" title="Handy Vorschau"></iframe>
-                        </div>
-                        <div class="source-footer"><span class="rate">— Mbit/s</span><button
-                                class="ghost preview-toggle" data-slot="2">Vorschau öffnen</button></div>
-                        <p class="small muted">Ersatzquelle · SRT</p>
-                    </article>
-                </section>
-                <details class="panel wide-details">
-                    <summary>Verbindungsdaten für OBS und Handy <span>Deine privaten Eingänge</span></summary>
-                    <div id="ingest-content"><button class="secondary" id="load-ingest">Zugangsdaten anzeigen</button>
-                    </div>
-                    <p class="small muted">OBS und Handy: H.264 · AAC Stereo · 48 kHz · möglichst 1080p30. Zugangsdaten
-                        nur in deinen Streaming-Apps verwenden.</p>
-                </details>
+                <p id="source-mode-status" class="small muted" role="status"></p>
+                <section class="sources" id="source-cards" aria-label="Einzelne Quellen"><p class="muted">Quellen werden geladen …</p></section>
+                <p class="small muted">Jede Quelle hat eigene Verbindungsdaten. Source 1 und Source 2 sind feste Standardquellen. Weitere Quellen lassen sich im Expertenmodus hinzufügen.</p>
             </section>
             <section class="app-view" data-view="videos" aria-label="Offline-Videos" hidden>
                 <details class="panel upload-drawer">
@@ -277,7 +244,7 @@
                         <div class="section-heading">
                             <h2>Offline-Video</h2><span class="tag">Dauerschleife</span>
                         </div>
-                        <p class="muted small">Wird gezeigt, wenn beide Quellen fehlen. Eine aktive Twitch-Verbindung
+                        <p class="muted small">Wird gezeigt, wenn alle Live-Quellen fehlen. Eine aktive Twitch-Verbindung
                             bleibt dabei bestehen.</p>
                         <form id="upload-form"><label class="upload-box">↑ <strong>MP4-Datei auswählen</strong><input
                                     accept="video/mp4,.mp4" name="video" required="" type="file" /><span
@@ -311,6 +278,7 @@
                 </section>
             </section>
             <section class="app-view" data-view="recordings" aria-label="Aufnahmen" hidden>
+                {% include 'native-segments.html' %}
                 <section class="panel recording-panel">
                     <div class="section-heading">
                         <div>
@@ -323,7 +291,7 @@
                     <div class="record-controls"><label>Aufnahmequelle<select id="record-source">
                                 <option value="live">Fertiger Ausgang</option>
                                 <option value="source1">Source 1 · OBS / Wiederholung</option>
-                                <option value="source2">Source 2 · Handy</option>
+                                <option value="source2">Source 2 · Handy</option><option value="source3">Source 3</option><option value="pull">RTSP-Pull</option>
                             </select></label><button class="primary" id="record-start">● Aufnahme
                             starten</button><button class="danger" disabled="" id="record-stop">■ Aufnahme
                             beenden</button><button class="secondary" disabled="" id="replay-stop">Wiederholung
@@ -397,6 +365,7 @@
                 </div>
             </section>
             <section class="app-view" data-view="settings" aria-label="Einstellungen" hidden>
+                {% include 'features-settings.html' %}
                 <div class="settings-columns">
                     <div>
                         <article class="panel">
@@ -456,7 +425,13 @@
                             </details><button class="ghost quiet" id="disconnect">Alle Streamschlüssel
                                 entfernen</button>
                         </article>
-                        <section class="panel wide-details">
+
+                    </div>
+
+                </div>
+            </section>
+            {% include 'expert-pages.html' %}
+            <section class="app-view" data-view="account" aria-label="Mein Konto" hidden>                        <section class="panel wide-details">
                             <h2>Mein Passwort ändern</h2>
                             <form class="password-form" id="password-form">
                                 <p class="small muted">Das neue Passwort benötigt mindestens 12 Zeichen.</p>
@@ -467,44 +442,7 @@
                                         type="password" /></label><button class="secondary" type="submit">Passwort
                                     ändern</button>
                             </form>
-                        </section>
-                    </div>
-                    <section class="panel renewal-panel">
-                        <div class="section-heading">
-                            <h2>24/7 · Verbindung erneuern</h2><span class="tag">Standardmäßig aus</span>
-                        </div>
-                        <p class="small muted">Erneuert nur die Verbindung zum Streamingziel. Deine lokalen Quellen,
-                            Wiederholung und Aufnahme laufen weiter. Eine neue Twitch-Sendung erfordert eine Trennung;
-                            Zuschauer können dabei eine Unterbrechung sehen. Kurze Neuverbindungen garantieren keinen
-                            Neustart der 48-Stunden-Frist.</p>
-                        <form id="renewal-form">
-                            <div class="settings-grid inner"><label>Automatisch erneuern<select id="renew-interval">
-                                        <option value="0">Aus · nur manuell</option>
-                                        <option value="300">Alle 5 Minuten · Test</option>
-                                        <option value="600">Alle 10 Minuten · Test</option>
-                                        <option value="1800">Alle 30 Minuten · Test</option>
-                                        <option value="43200">Alle 12 Stunden</option>
-                                        <option value="86400">Alle 24 Stunden</option>
-                                        <option value="129600">Alle 36 Stunden</option>
-                                        <option value="172800">Alle 48 Stunden · bei Twitch 2 Minuten vorher</option>
-                                    </select></label><label>Trennpause<select id="renew-gap">
-                                        <option value="2">2 Sekunden · kurze Neuverbindung</option>
-                                        <option value="5">5 Sekunden</option>
-                                        <option value="10">10 Sekunden</option>
-                                        <option value="30">30 Sekunden</option>
-                                        <option value="95">95 Sekunden · neue Sendung anstoßen</option>
-                                        <option value="120">120 Sekunden</option>
-                                    </select></label></div>
-                            <p class="small muted">Twitch-Disconnect-Schutz kann Trennungen bis zu 90 Sekunden
-                                überbrücken. Eine längere Trennung kann eine neue Sendung bewirken, unterbricht aber die
-                                Zuschauerausgabe. Das ist keine unterbrechungsfreie Umgehung des Twitch-Limits.</p>
-                            <button class="secondary" type="submit">Einstellungen speichern</button><button
-                                class="ghost" disabled="" id="renew-now" type="button">Jetzt neu verbinden</button>
-                        </form>
-                        <p class="small muted" id="renew-note" role="status"></p>
-                    </section>
-                </div>
-            </section>
+                        </section></section>
             {% if user.admin %}<section class="app-view" data-view="administration" aria-label="Administration" hidden>
                 <section class="panel wide-details" id="admin">
                     <h2>Administration </h2>
@@ -519,7 +457,7 @@
                                         type="password" /></label><button class="secondary" type="submit">Benutzer
                                     anlegen</button>
                             </form>
-                            <p class="small muted">Jeder Benutzer erhält automatisch zwei Quellen und ein Offline-Video.
+                            <p class="small muted">Jeder Benutzer erhält drei Publish-Quellen und optionalen RTSP-Pull und ein Offline-Video.
                             </p>
                             <div id="user-list"></div>
                         </section>

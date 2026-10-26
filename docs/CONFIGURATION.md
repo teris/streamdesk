@@ -8,12 +8,16 @@ Die aktive Datei ist standardmäßig `/etc/streamdesk.env`; bei einem eigenen Di
 | `STREAMDESK_INGEST` | Vom Encoder erreichbarer Hostname bzw. IP. |
 | `STREAMDESK_BIND` | Gunicorn-Listener, Standard `0.0.0.0:8080`. |
 | `STREAMDESK_DATA` | Datenbank, Schlüssel, Benutzer-Medien, Aufnahmen und Upload-Zwischenspeicher. |
+| `STREAMDESK_APP_DIR` | Vom Installer ab 1.1.0-rc.2 gespeicherter Programmordner für spätere Updates und Wiederaufsetzen. |
+| `STREAMDESK_NATIVE_ROOT` | Separates Verzeichnis für native MediaMTX-Segmente, Standard als Nachbar von `STREAMDESK_DATA`: `/var/lib/streamdesk-native`. Installer gibt ausschließlich diesen Bereich dem MediaMTX-Dienstbenutzer. |
 | `STREAMDESK_DEFAULT_CLIP` | Persönliche Standby-Vorlage, vom Installer selbst erzeugt. |
 | `STREAMDESK_NAMESPACE` | Reservierter MediaMTX-Präfix, Standard `streamdesk`. Nach Einrichtung nicht ohne Datenmigration ändern. |
 | `MEDIAMTX_CONFIG` | Lokal schreibbare MediaMTX-Konfiguration. |
 | `MEDIAMTX_API` | Lokaler API-Endpunkt inklusive `/v3/`. |
 | `MEDIAMTX_RTSP` | Lokaler RTSP-Endpunkt inklusive abschließendem `/`. |
 | `MEDIAMTX_HLS` | Lokaler HLS-Endpunkt inklusive abschließendem `/`. |
+| `MEDIAMTX_WEBRTC` | Optionaler lokaler WHIP-/WHEP-Endpunkt inklusive abschließendem `/`. Ohne Angabe aus `webrtcAddress` und `webrtcEncryption` der lokalen Konfiguration abgeleitet. |
+| `MEDIAMTX_PLAYBACK` | Optionaler interner Playback-Endpunkt. Sonst aus `playbackAddress` und `playbackEncryption` abgeleitet; gültige TLS-Zertifikate erforderlich. |
 | `MEDIAMTX_RTMP_PORT` | Port, der in den OBS-Adressen angezeigt wird. |
 | `MEDIAMTX_SRT_PORT` | Port, der in den Handy-Adressen angezeigt wird. |
 | `STREAMDESK_LOCAL_IPS` | Eigene lokale Quelladressen für die Medien-/API-Dienstberechtigung. Keine fremden Client-IP-Adressen eintragen. |
@@ -29,3 +33,27 @@ Die aktive Datei ist standardmäßig `/etc/streamdesk.env`; bei einem eigenen Di
 Der Installer leitet lokale Endpunkte aus der vorhandenen MediaMTX-Konfiguration ab. Nach manueller Änderung eines Medienports auch die betreffenden Env-Werte anpassen. API-/HLS-TLS-Zertifikate werden regulär geprüft.
 
 Der UI-Dienst arbeitet derzeit als root, weil er lokale Medienpfade, Benutzerdateien und die MediaMTX-Konfiguration verwaltet. Browser-Overlays laufen unter einem separaten Systemkonto mit temporärem Arbeitsverzeichnis. Die systemd-Unit begrenzt schreibbare Bereiche. Eine Trennung der gesamten Verwaltungsanwendung auf einen weniger privilegierten Dienstbenutzer ist ein möglicher zukünftiger Ausbau.
+
+## Erweiterungen ab 1.1.0-rc.4
+
+Playback ist bei Neuinstallationen aus. Ein Administrator aktiviert es unter **Expertenmodus → Playback**, mit einem Loopback-Listener wie `127.0.0.1:9996`. Alternativ beim Installieren/Update ausdrücklich `--enable-playback --playback-port 9996` angeben. Ohne diesen Schalter bleiben bestehende Playback-Listener, Aktivierung und TLS-Einstellungen erhalten. Der Port muss vom UI-Prozess erreichbar sein; eine öffentliche Portfreigabe ist für StreamDesk nicht nötig. Vorhandene externe Playback-Listener in Attach-Installationen werden nur durch eine ausdrückliche Änderung umkonfiguriert.
+
+Ab rc.6 sind nur Source 1 und Source 2 standardmäßig vorhanden. Weitere Quellen erhalten erst beim ausdrücklichen Anlegen einen eigenen Tenant-Pfad, z. B. `<namespace>/<benutzer>/source3`. Die alten Vorschauen `/preview/1/`, `/preview/2/`, `/preview/3/` bleiben für Source 1, Source 2 und Standardprogramm gültig. Neue source-spezifische Links verwenden `/preview/source/<quellen-id>/`, Programme `/program/<programm-id>/`. Alle sind durch die angemeldete Eigentümersitzung geschützt.
+
+Die Tabellen `routing_sources`, `output_routing` und `routing_programs` speichern zusätzliche Quellen, Ausgangszuordnungen und die Historie stabiler Programme. Die Quellenmenge bestimmt die Programmkennung; die Priorität wird unabhängig davon gespeichert. Gleiche Mengen teilen sich eine Pipeline, unterschiedliche Mengen können unabhängig senden. In `outputs` bleiben die festen Kennungen `twitch`, `youtube`, `custom` erhalten; zusätzliche Ausgänge heißen `twitch-<id>`, `youtube-<id>` bzw. `custom-<id>`. Zugangsdaten werden verschlüsselt in der Datenbank und nur soweit für MediaMTX erforderlich in der privaten YAML gespeichert.
+
+RTSP-/RTSPS-Pull-Quellen sind optional und benötigen öffentliche Ziele. Lokale/private/link-local und eigene Ingest-Adressen werden wie bei Forwards abgelehnt. DNS wird beim Speichern einer Adresse und beim erneuten Aktivieren geprüft; Deaktivieren benötigt keine erneute DNS-Auflösung. Diese Prüfung ersetzt keine ausgehende Netzwerk-Firewall.
+
+Die Migration übernimmt nachweislich genutzte frühere Source-3-/Pull-Konfigurationen, Aufnahmen und bestehende Ausgänge. Eine unbenutzte, zuvor automatisch erzeugte Source 3 entfällt. Ist die MediaMTX-API während der Migration nicht erreichbar, bleibt ein vorhandener Source-3-Pfad vorsichtshalber als zusätzliche Quelle erhalten. Bestehende Ausgabezuordnungen bleiben erhalten; für neue Benutzer gelten ausschließlich Source 1/2. Eine native Aufnahme eines bisherigen erweiterten Programms wird dessen fortgeführter Programmgruppe zugeordnet. Historische Dateien bleiben erreichbar. Die alte globale manuelle Quellenwahl wird durch die je Ausgang festen Prioritäten ersetzt.
+
+## Programmpfad ab 1.1.0-rc.5
+
+`<präfix>/live` bleibt für aktive Benutzer mit `alwaysAvailable: true` verfügbar. Die Einstellung hängt nicht mehr von der Forward-Liste ab; Ziel-Start/Stopp setzt sie nicht zurück. `alwaysAvailableRecorded: true` hält ausdrücklich aktivierte native Programmaufnahmen während Quellenlücken am Standby-Signal. Es werden keine Aufnahmen automatisch aktiviert. Deaktivierte Benutzer erhalten keinen verfügbaren Programmpfad.
+
+Das Programm verwendet H.264 Baseline, 1080p30 ohne B-Frames, ungefähr 4,5 Mbit/s Video und AAC/48 kHz/Stereo. Für die zusätzliche Videoaufbereitung CPU einplanen. Nur die WebRTC-Programmvorschau liest den separaten persönlichen Pfad `webrtc-program` mit H.264/Opus. Seine Videodaten werden aus dem normalisierten Programm kopiert; dafür ist kein zweiter Videoencoder erforderlich. `libopus` ist Bestandteil des durch den Installer installierten Debian-FFmpeg-Pakets.
+
+Vorschau, manuelle Programmaufnahme, aktivierte native Programmaufnahme und Streamingziele zählen als Verbraucher. Ohne Live-Quelle und ohne Verbraucher wird kein Offline-/Browser-Renderer gestartet. Die MediaMTX-Standby-Verfügbarkeit selbst legt keine zusätzliche Datei an. Direkte Eingangs-/Programmdateirechte und fremde Attach-Pfade bleiben unverändert.
+
+## Konten ab rc.6
+
+Die Tabelle `user_id_sequence` reserviert Benutzer-IDs dauerhaft; nach einer Kontolöschung wird keine alte ID für ein neues Konto wiederverwendet. Dies schützt alte Sitzungscookies vor Zuordnung zu einem neuen Benutzer. Ein Passwortwechsel erhöht weiterhin die Sitzungsversion und aktualisiert nur die aktuelle Anmeldung.

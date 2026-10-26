@@ -1,0 +1,5 @@
+<section class="panel" data-expert-only {% if not expert %}hidden{% endif %}>
+    <h2>Öffentlicher Zuschauer-Link</h2><p class="small muted">Jeder mit diesem Link kann dein Programm ansehen. Eine neue Freigabe macht den bisherigen Link ungültig. Ohne Live-Quelle startet das Offline-Video weiterhin erst bei verbundenem Streamingziel.</p>
+    <label>Zuschauer-Link<input id="viewer-url" type="text" readonly placeholder="Keine Freigabe aktiv"></label>
+    <div class="feature-actions"><button id="viewer-enable" class="secondary" type="button">Link erstellen / erneuern</button><button id="viewer-disable" class="danger" type="button">Freigabe widerrufen</button><button id="viewer-copy" class="ghost" type="button">Link kopieren</button></div>
+</section>

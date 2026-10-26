@@ -1,0 +1,35 @@
+<nav id="expert-subnav" class="expert-subnav" aria-label="Experten-Untermenü" hidden>
+    <a href="#expert">Übersicht &amp; Modus</a>
+    <a href="#expert-protocols" data-expert-only {% if not expert %}hidden{% endif %}>Protokolle &amp; WebRTC</a>
+    <a href="#expert-routing" data-expert-only {% if not expert %}hidden{% endif %}>Quellen &amp; Routing</a>
+    <a href="#expert-outputs" data-expert-only {% if not expert %}hidden{% endif %}>Ausgänge &amp; Konten</a>
+    <a href="#expert-recording" data-expert-only {% if not expert %}hidden{% endif %}>Native Aufnahme</a>
+    <a href="#expert-playback" data-expert-only {% if not expert %}hidden{% endif %}>Playback</a>
+    <a href="#expert-viewers" data-expert-only {% if not expert %}hidden{% endif %}>Zuschauerfreigabe</a>
+    <a href="#expert-renewal" data-expert-only {% if not expert %}hidden{% endif %}>Neuverbindung</a>
+</nav>
+<section class="app-view" data-view="expert" aria-label="Expertenmodus" hidden>
+    <section class="panel expert-overview"><h2>Technische Einstellungen freischalten</h2>
+    <p class="muted">Alle MediaMTX-Einstellungen sind in diesem Untermenü gebündelt. Darstellung, Chat und die normale Stream-Bedienung bleiben in den gewohnten Ansichten.</p>
+    <form id="expert-form"><label class="feature-check"><input id="expert-mode" type="checkbox" {% if expert %}checked{% endif %}> Expertenmodus für diese Anmeldung aktivieren</label><p class="small muted">Schaltet technische MediaMTX-Einstellungen frei. Nach einer neuen Anmeldung ist der Modus aus. Bereits gespeicherte Quellen-, Aufnahme- und Freigabeeinstellungen bleiben beim Ausschalten wirksam.</p><button class="secondary" type="submit">Modus übernehmen</button></form>
+    </section>
+    <section class="panel" data-expert-only {% if not expert %}hidden{% endif %}><h2>Expertenbereiche</h2>
+        <div class="expert-cards">
+            <a href="#expert-protocols"><strong>Protokolle &amp; WebRTC</strong><span>Serverstatus, WebRTC aktivieren, Kamera und Vorschau</span></a>
+            <a href="#expert-routing"><strong>Quellen &amp; Routing</strong><span>Quellen einzeln verwalten, Prioritäten und Ziele zuordnen</span></a>
+            <a href="#expert-outputs"><strong>Ausgänge &amp; Konten</strong><span>Zusätzliche Konten, Anbieter und einzelne Ausgänge verwalten</span></a>
+            <a href="#expert-recording"><strong>Native Aufnahme</strong><span>Format, Segmente und Aufbewahrung</span></a>
+            <a href="#expert-playback"><strong>Playback</strong><span>Eigene Aufnahmesegmente zeitversetzt abspielen</span></a>
+            <a href="#expert-viewers"><strong>Zuschauerfreigabe</strong><span>Öffentlichen Player freigeben oder widerrufen</span></a>
+            <a href="#expert-renewal"><strong>Neuverbindung</strong><span>Verbindungsintervalle und manuelles Erneuern</span></a>
+        </div>
+    </section>
+</section>
+<section class="app-view" data-view="expert-protocols" data-expert-view aria-label="Protokolle und WebRTC" hidden>{% include 'features-protocols.html' %}</section>
+<section class="app-view" data-view="expert-routing" data-expert-view aria-label="Quellen und Ziele" hidden>{% include 'features-sources.html' %}</section>
+<section class="app-view" data-view="expert-recording" data-expert-view aria-label="Native Aufnahme konfigurieren" hidden>{% include 'features-recordings.html' %}</section>
+<section class="app-view" data-view="expert-playback" data-expert-view aria-label="Geschütztes Playback" hidden>{% include 'features-playback.html' %}</section>
+<section class="app-view" data-view="expert-viewers" data-expert-view aria-label="Zuschauerfreigabe" hidden>{% include 'features-viewers.html' %}</section>
+<section class="app-view" data-view="expert-renewal" data-expert-view aria-label="Neuverbindung" hidden>{% include 'features-renewal.html' %}</section>
+
+<section class="app-view" data-view="expert-outputs" data-expert-view aria-label="Ausgänge und Konten" hidden>{% include 'features-outputs.html' %}</section>
