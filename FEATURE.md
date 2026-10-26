@@ -1,6 +1,6 @@
 # Feature-Übersicht – MediaMTX - StreamDesk
 
-Stand: Version 1.0.0 · Bezug: MediaMTX **v1.21.x**  
+Stand: Version 1.1.0-rc.3 · Bezug: MediaMTX **v1.21.x**
 Dies ist ein Community-UI um MediaMTX, kein offizieller Bestandteil von MediaMTX.
 
 ---
@@ -15,7 +15,24 @@ Dies ist ein Community-UI um MediaMTX, kein offizieller Bestandteil von MediaMTX
 | Persönliche Konten | Getrennte Eingänge, Videos, Aufnahmen, Ausgänge und Chat-Widgets pro Benutzer |
 | Administration | Benutzer anlegen/aktivieren, Twitch- und Google-App-Credentials |
 | Anmeldung | Session, CSRF, Rate-Limits (IP + Benutzername), optional Proxy-Trust |
-| Installer | `attach` (bestehendes MediaMTX), `standalone` (MediaMTX mitliefern), `update` |
+| Installer | `attach` (bestehendes MediaMTX), `standalone` (MediaMTX mitliefern), `update`; `--recover` für Neuanfang bei fehlender Datenbank |
+| Expertenmodus | Eigener Menüpunkt und Untermenüs; pro Anmeldung standardmäßig aus, serverseitige Prüfung technischer Endpunkte, globale Einstellungen zusätzlich nur für Administratoren |
+| Theme und Mobilgeräte | Helles/dunkles/System-Theme pro Benutzer und Touch-Bedienelemente, unabhängig vom Expertenmodus |
+
+### Erweiterungen ab 1.1.0-rc.1
+
+Die folgenden **Einstellungen und technischen Aktionen benötigen den Expertenmodus**. Bereits gespeicherte Einstellungen bleiben beim Ausschalten wirksam. Normale Bedienung, Chat, Medienbibliotheken und Design bleiben verfügbar. Details: [Expertenmodus](docs/EXPERT_MODE.md).
+
+| Feature | Umfang |
+| --- | --- |
+| Manuelle Quellenwahl | Auto / Source 1 / Source 2 / Offline; gewählte Live-Quelle fehlt → Offline beim Senden |
+| Per-Ziel Start/Stopp | Einzelne konfigurierte Ziele steuern, andere Ziele und nächste Startauswahl erhalten |
+| WebRTC Publish/Play | Browser-Kamera über WHIP, Vorschau über WHEP, tenantbezogener Signalisierungsproxy |
+| WebRTC-Servereinstellung | Aktivierung und zusätzliche erreichbare Hosts, zusätzlich Administratorrechte erforderlich |
+| Native Path-Aufnahme | fMP4/MPEG-TS auf Source 1, Source 2 oder Programm; Segmentdauer und Aufbewahrung; separater privater Speicher |
+| Native Segmentbibliothek | Download und fMP4-Vorschau auch ohne Expertenmodus; kein MediaMTX-Playback-Server |
+| Öffentliche HLS-Seite | Persönlicher erneuerbarer/widerrufbarer Zuschauer-Link, ausschließlich Programm und lesender Zugriff |
+| Twitch-Neuverbindung | Bestehende Intervallsteuerung und manuelle Neuverbindung jetzt nur im Expertenmodus |
 
 ### MediaMTX – genutzt
 
@@ -75,8 +92,6 @@ Priorität ist eine grobe Einordnung für die Roadmap, keine Zusage.
 
 | Idee | MediaMTX-Basis | Nutzen | Priorität |
 | --- | --- | --- | --- |
-| **WebRTC Publish/Play** | `webrtc: true`, WHEP/WHIP | Browser-Kamera/Handy ohne OBS; niedrige Latenz-Vorschau | hoch |
-| **Öffentliche HLS-/Player-Seite** | HLS + Playback-Rechte | Zuschauer-Link ohne Twitch/YouTube | hoch |
 | **RTMPS-/RTSPS-Ingest** | `rtmpEncryption` / `rtspEncryption` | Verschlüsselter Encoder-Eingang | mittel |
 | **Media-over-QUIC (MoQ)** | `moq` | Moderne Transportoption | niedrig |
 | **MPEG-TS / RTP Publish** | native Listener | Spezial-Encoder, Broadcast-Hardware | niedrig |
@@ -87,7 +102,6 @@ Priorität ist eine grobe Einordnung für die Roadmap, keine Zusage.
 
 | Idee | MediaMTX-Basis | Nutzen | Priorität |
 | --- | --- | --- | --- |
-| **Path-Recording (fMP4/MPEG-TS)** | `record`, `recordPath`, Segmentierung | Daueraufnahme ohne ffmpeg-Relay-Aufnahme | hoch |
 | **Playback aufgezeichneter Segmente** | Playback-Server / `playback` | Zeitversetzte Wiedergabe, Clips aus Segmenten | mittel |
 | **Aufnahmeplan / Zeitsteuerung** | Hooks + Scheduler im UI | Geplante Sessions, Nachtschichten | mittel |
 | **Cloud-Export** | nach Record-Hook | S3/WebDAV nach Segmentende | niedrig |
@@ -97,7 +111,6 @@ Priorität ist eine grobe Einordnung für die Roadmap, keine Zusage.
 | Idee | MediaMTX-Basis | Nutzen | Priorität |
 | --- | --- | --- | --- |
 | **Mehr als zwei Live-Quellen** | weitere Paths | Kamera 3, Discord-Capture, … | mittel |
-| **Manuelle Quellenwahl** | Engine statt Auto | Regisseur wählt fest Source 1/2/Offline | hoch |
 | **Externe Pull-Quellen** | `source: rtsp://…` / `rpiCamera` | IP-Kameras, Raspberry Pi Cam | mittel |
 | **Source-on-demand** | `sourceOnDemand` | Ressourcen sparen, wenn niemand liest | niedrig |
 | **Fallback-Kette konfigurierbar** | Path + Engine | Reihenfolge und Timeouts im UI | mittel |
@@ -110,7 +123,6 @@ Priorität ist eine grobe Einordnung für die Roadmap, keine Zusage.
 | --- | --- | --- | --- |
 | **Unbegrenzt viele Custom-Ziele** | mehrere `forward`-Einträge | Mehr als Twitch/YouTube/ein Custom | mittel |
 | **Kick, Facebook, Trovo-Vorlagen** | Forward-URLs | Vorgefertigte Ingest-Profile | niedrig |
-| **Per-Ziel Start/Stopp** | Path-Patches | Nur YouTube stoppen, Twitch läuft weiter | hoch |
 | **Bandbreiten-/Bitrate-Hinweis** | Metrics + UI | Warnung bei zu vielen Zielen | niedrig |
 | **Proxy-Pfad zu anderem Server** | Path-Proxy | Kaskade / Edge-Server | niedrig |
 
@@ -136,8 +148,6 @@ Priorität ist eine grobe Einordnung für die Roadmap, keine Zusage.
 | **Rollen** | Moderator nur Chat, kein Stream-Start | niedrig |
 | **Clip-Erzeugung** | Kurzer Ausschnitt aus laufender Aufnahme/HLS | mittel |
 | **Mehrsprachigkeit** | EN/DE umschaltbar | niedrig |
-| **Dark/Light Theme** | Darstellungswahl | niedrig |
-| **Mobile-optimierte Regie** | Touch-UI für Start/Stopp und Quellen | mittel |
 | **Discord-Chat** | Weitere Chat-Quelle neben Twitch/YouTube | niedrig |
 
 ---
@@ -148,16 +158,14 @@ Priorität ist eine grobe Einordnung für die Roadmap, keine Zusage.
 - **HTTP/JWT-Auth umbauen** – Installer stellt nicht automatisch um; nur interne Auth wird unterstützt.
 - **Fremde Paths löschen oder überschreiben** – Attach respektiert bestehende Medien.
 - **YouTube-Sendungen erstellen/beenden** – nur Auswahl und Streamschlüssel, keine Studio-Automation.
-- **Automatischer Aufnahme-Neustart** – Aufnahmen sind manuell und enden bei Quellabbruch.
-- **WebRTC / MoQ** – in Standalone-Defaults bewusst aus (`webrtc: false`, `moq: false`).
+- **Automatischer Neustart manueller MP4-Aufnahmen** – diese bleiben manuell und enden bei Quellabbruch. Explizit aktivierte native Path-Aufnahmen laufen bei erneut verfügbarer Quelle weiter.
+- **WebRTC / MoQ in Standalone-Defaults** – zunächst aus (`webrtc: false`, `moq: false`); WebRTC lässt sich anschließend als Administrator im Expertenmodus aktivieren.
 
 ---
 
 ## Vorschlag nächste Schritte
 
-1. **Manuelle Quellenwahl** und **per-Ziel Start/Stopp** – großer Regie-Nutzen ohne neue MediaMTX-Version.  
-2. **WebRTC-Vorschau oder WHIP-Publish** – nutzt vorhandenes MediaMTX-Feature, senkt Einstiegshürde.  
-3. **Natives Path-Recording** – weniger ffmpeg-Last, Segmente und Playback aus MediaMTX.  
-4. **Öffentliche Zuschauer-HLS-Seite** – optionaler Direct-to-Fan-Kanal neben Twitch/YouTube.
+1. Die Erweiterungen 1.1.0-rc.1 auf dem eigenen Testserver mit realem Encoder, HTTPS und WebRTC-Netzwerk prüfen.
+2. Anschließend nach Bedarf MediaMTX-Playback-Server, weitere Quellen und zusätzliche Custom-Ziele ausbauen.
 
 Feedback und Priorisierung: Issues oder Beiträge gemäß [CONTRIBUTING.md](CONTRIBUTING.md).

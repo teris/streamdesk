@@ -56,6 +56,8 @@ def main():
     Path('/etc/systemd/system/' + args.service_name + '.service').unlink(missing_ok=True)
     subprocess.run(['systemctl', 'daemon-reload'], check=True)
     print('UI-Integration entfernt. Daten und Schlüssel bleiben unter ' + env['STREAMDESK_DATA'])
+    if env.get('STREAMDESK_NATIVE_ROOT'):
+        print('Native Aufnahmesegmente bleiben unter ' + env['STREAMDESK_NATIVE_ROOT'])
     print('MediaMTX, Quellcode und Sicherungen bleiben erhalten. Sicherung: ' + str(backup))
 
 

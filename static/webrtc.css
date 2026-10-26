@@ -1,0 +1,4 @@
+.rtc-panel { width:min(100% - 32px,960px); margin:32px auto; }
+.rtc-panel video { width:100%; max-height:65vh; background:#000; border:1px solid var(--line); border-radius:12px; }
+.rtc-controls { display:flex; gap:12px; flex-wrap:wrap; margin:16px 0; }
+.rtc-controls button { min-height:44px; }

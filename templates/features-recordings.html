@@ -1,0 +1,11 @@
+<section class="panel" data-expert-only {% if not expert %}hidden{% endif %}>
+    <h2>Native MediaMTX-Aufnahme</h2>
+    <p class="small muted">Zeichnet die gewählte Quelle segmentiert auf, sobald sie verfügbar ist, auch nach erneuter Verbindung und Serverneustart. Die manuelle MP4-Aufnahme darunter bleibt separat bedienbar.</p>
+    <form id="native-form"><div class="feature-grid">
+        <label>Quelle<select id="native-source"><option value="live">Programm</option><option value="source1">Source 1</option><option value="source2">Source 2</option><option value="source3">Source 3</option><option value="pull">RTSP-Pull</option></select></label>
+        <label>Format<select id="native-format"><option value="fmp4">fMP4</option><option value="mpegts">MPEG-TS</option></select></label>
+        <label>Segmentdauer<select id="native-segment"><option value="1m">1 Minute</option><option value="5m">5 Minuten</option><option value="15m" selected>15 Minuten</option><option value="1h">1 Stunde</option></select></label>
+        <label>Aufbewahrung<select id="native-retention"><option value="1d">1 Tag</option><option value="7d" selected>7 Tage</option><option value="30d">30 Tage</option></select></label>
+    </div><label class="feature-check"><input id="native-enabled" type="checkbox"> Native Aufnahme dieser Quelle aktivieren</label><button class="secondary" type="submit">Aufnahmeeinstellungen speichern</button></form>
+    <p id="native-status" class="small muted" role="status"></p>
+</section>

@@ -88,19 +88,49 @@ def contains_settings(actual, expected):
     return actual == expected
 
 
-def synchronize_runtime(call, config, namespace):
+def list_items(call, endpoint):
+    items, page = [], 0
+    while True:
+        result = call(endpoint+'?itemsPerPage=1000'+('&page='+str(page) if page else ''))
+        items.extend(result.get('items', []))
+        page += 1
+        if page >= result.get('pageCount', 1):
+            return items
+        if page > 10000:
+            raise ValueError('Ungültige Seitenzahl der MediaMTX-API.')
+
+
+def synchronize_runtime(call, config, namespace, obsolete_paths=()):
     """Apply only managed changes; fast consecutive atomic file writes can coalesce."""
     from urllib.parse import quote
     current = call('config/global/get')
     users = config.get('authInternalUsers', [])
     if not contains_settings(current.get('authInternalUsers'), users):
         call('config/global/patch', {'authInternalUsers': users}, method='PATCH')
-    existing = {item['name']: item for item in call('config/paths/list?itemsPerPage=1000').get('items', [])}
+    existing = {item['name']: item for item in list_items(call,'config/paths/list')}
+    for name in obsolete_paths:
+        if not name.startswith(namespace + '/') or name in config.get('paths', {}) or name not in existing:
+            continue
+        try:
+            call('config/paths/delete/' + quote(name, safe='/'), method='DELETE')
+        except Exception as error:
+            if getattr(error, 'status', None) != 404:
+                raise
     for name, settings in config.get('paths', {}).items():
         if not name.startswith(namespace + '/'):
             continue
         path = quote(name, safe='/')
         if name not in existing:
-            call('config/paths/add/' + path, settings, method='POST')
+            try:
+                call('config/paths/add/' + path, settings, method='POST')
+            except Exception as error:
+                if getattr(error, 'status', None) != 400:
+                    raise
+                # The file watcher can add the path between our list and POST.
+                refreshed = {item['name']: item for item in list_items(call,'config/paths/list')}
+                if name not in refreshed:
+                    raise
+                if not contains_settings(refreshed[name], settings):
+                    call('config/paths/patch/' + path, settings, method='PATCH')
         elif not contains_settings(existing[name], settings):
             call('config/paths/patch/' + path, settings, method='PATCH')

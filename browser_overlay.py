@@ -89,7 +89,7 @@ def main():
                        '-f', 'image2pipe', '-framerate', str(fps), '-vcodec', 'png', '-i', 'pipe:0',
                        '-filter_complex_threads', '1', '-filter_complex', '[0:v][1:v]overlay=0:0:shortest=1:format=auto,format=yuv420p[v]',
                        '-map', '[v]', '-map', '0:a:0', '-c:v', 'libx264', '-preset', 'ultrafast', '-threads', '1',
-                       '-tune', 'zerolatency', '-profile:v', 'high', '-pix_fmt', 'yuv420p',
+                       '-tune', 'zerolatency', '-profile:v', 'baseline', '-bf', '0', '-pix_fmt', 'yuv420p',
                        '-b:v', '4500k', '-maxrate', '4500k', '-bufsize', '9000k', '-r', '30', '-g', '60',
                        '-c:a', 'copy', '-f', 'rtsp', '-rtsp_transport', 'tcp', destination]
             process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

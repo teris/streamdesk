@@ -24,20 +24,34 @@ let widgetBase='';
 const rateHistory = {receive:[], send:[]};
 const viewInfo = {
   dashboard:['ÜBERSICHT','Dein Stream auf einen Blick.','Signal, Sendezeit und Medien – alles an einem Ort.','Dashboard'],
-  sources:['LIVE-EINGÄNGE','Deine Quellen.','OBS hat Vorrang. Das Handy übernimmt bei Ausfall.','Quellen'],
+  sources:['LIVE-EINGÄNGE','Deine Quellen.','Live-Eingänge, Vorschau und aktuelle Quellensteuerung.','Quellen'],
   videos:['MEDIENBIBLIOTHEK','Deine Offline-Videos.','Videos auswählen, hochladen und mit Overlays gestalten.','Offline-Videos'],
   recordings:['AUFNAHMEBIBLIOTHEK','Aufnehmen & Wiederholen.','Deine Aufnahmen speichern, herunterladen und manuell als Source 1 zuschalten.','Aufnahmen'],
   chat:['GEMEINSAMER LIVE-CHAT','Deine Chats an einem Ort.','Twitch und YouTube lesen, gezielt schreiben und als Widget einbinden.','Chat & Widget'],
-  settings:['DEIN ARBEITSPLATZ','Einstellungen.','Streamingziel, Neuverbindung und dein Passwort verwalten.','Einstellungen'],
+  settings:['DEIN ARBEITSPLATZ','Einstellungen.','Darstellung, Plattformkonten und dein Passwort verwalten.','Einstellungen'],
+  account:['MEIN KONTO','Dein Konto.','Dein eigenes Passwort und deine Anmeldung verwalten.','Mein Konto'],
+  'expert-outputs':['EXPERTENMODUS','Ausgänge & Konten.','Weitere Konten und Anbieter hinzufügen, Ausgänge getrennt steuern.','Ausgänge & Konten'],
+  expert:['TECHNISCHE VERWALTUNG','Expertenmodus.','MediaMTX-Einstellungen in einem eigenen Bereich.','Expertenmodus'],
+  'expert-protocols':['EXPERTENMODUS','Protokolle & WebRTC.','Serverstatus, WebRTC-Einrichtung und Kamera-Verbindungen.','Protokolle & WebRTC'],
+  'expert-routing':['EXPERTENMODUS','Quellen & Routing.','Quellen einzeln verwalten und ihren Ausgängen zuordnen.','Quellen & Routing'],
+  'expert-playback':['EXPERTENMODUS','Playback.','Eigene Aufnahmesegmente geschützt abspielen.','Playback'],
+  'expert-recording':['EXPERTENMODUS','Native Aufnahme.','MediaMTX-Aufnahme, Segmente und Aufbewahrung konfigurieren.','Native Aufnahme'],
+  'expert-viewers':['EXPERTENMODUS','Zuschauerfreigabe.','Öffentlichen Player freigeben, erneuern oder widerrufen.','Zuschauerfreigabe'],
+  'expert-renewal':['EXPERTENMODUS','Neuverbindung.','Verbindungsintervalle und manuelle Neuverbindung.','Neuverbindung'],
   administration:['VERWALTUNG','Administration.','Benutzer und die gemeinsame Twitch-App verwalten.','Administration']
 };
 function showView(){
   const requested=location.hash.slice(1)||'dashboard';
-  const next=Object.hasOwn(viewInfo,requested)&&document.querySelector(`[data-view="${requested}"]`)?requested:'dashboard';
-  if(next!==requested)history.replaceState(null,'','#dashboard');
+  let next=Object.hasOwn(viewInfo,requested)&&document.querySelector(`[data-view="${requested}"]`)?requested:'dashboard';
+  if(next.startsWith('expert-')&&document.documentElement.dataset.expert!=='true')next='expert';
+  if(next!==requested)history.replaceState(null,'','#'+next);
   const previous=currentView;currentView=next;
   for(const view of document.querySelectorAll('.app-view'))view.hidden=view.dataset.view!==next;
   for(const link of document.querySelectorAll('.menu-link')){
+    if(link.hash==='#'+next||link.hash==='#expert'&&next.startsWith('expert-'))link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');
+  }
+  $('#expert-subnav').hidden=!next.startsWith('expert');
+  for(const link of document.querySelectorAll('#expert-subnav a')){
     if(link.hash==='#'+next)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');
   }
   const [eyebrow,title,description,label]=viewInfo[next];
@@ -46,7 +60,7 @@ function showView(){
     for(const frame of document.querySelectorAll('.app-view iframe')){frame.src='about:blank';frame.hidden=true;}
     for(const player of document.querySelectorAll('.app-view video'))player.pause();
     for(const button of document.querySelectorAll('.preview-toggle:not([data-slot="3"])'))button.textContent='Vorschau öffnen';
-    if(next!=='sources')$('#ingest-content').closest('details').open=false;
+    if(next!=='sources')document.querySelectorAll('.source-credentials').forEach(details=>{details.open=false;details.querySelector('.credential-fields').replaceChildren();});
     window.scrollTo(0,0);
   }
   if(state)render(state);
@@ -93,10 +107,6 @@ function renderDashboard(data){
   $('#stat-total-note').textContent=stats.stats_since?'Erfasst seit '+new Date(stats.stats_since*1000).toLocaleDateString('de-DE'):'Wird ab diesem Update erfasst';
   $('#dash-recording').textContent=data.recording?.active?'● Aufnahme · '+duration(Date.now()/1000-data.recording.active.started):'Keine Aufnahme';
   $('#dash-recording').classList.toggle('online',!!data.recording?.active);
-  for(let i=1;i<=2;i++){
-    const status=data.ok?data.sources?.[i-1]?.state:'unknown';const label={online:'Online',offline:'Offline',stalled:'Keine Daten',unknown:'Unbekannt'}[status]||'Prüfe …';
-    $(`#dash-source${i}`).textContent='● '+(i===1?(data.replay_id?'Wiederholung':'OBS'):'Handy')+' · '+label;$(`#dash-source${i}`).className='source-pill '+status;
-  }
   if(data.ok&&performance.now()-rateSampleAt>=1500){
     rateSampleAt=performance.now();rateHistory.receive.push(data.receive_mbps||0);rateHistory.send.push(data.send_mbps||0);
     for(const [key,values] of Object.entries(rateHistory)){
@@ -132,6 +142,8 @@ async function api(path, body, method = 'POST') {
 }
 function render(data) {
   state = data;
+  window.dispatchEvent(new CustomEvent('streamdesk:status', {detail:data}));
+  window.StreamDeskRouting?.render(data);
   const online = data.ok;
   renderDashboard(data);
   renderDestinations(data);
@@ -149,7 +161,7 @@ function render(data) {
     $('#output-state').textContent = 'Status nicht verfügbar';
     $('#output-description').textContent = data.error || 'Verbindung wird erneut versucht.';
     $('#output-dot').className = 'dot error';
-    for (let i = 1; i <= 2; i++) { $(`#source${i} .badge`).textContent = 'Unbekannt'; $(`#source${i} .badge`).className = 'badge'; $(`#source${i} .rate`).textContent = '— Mbit/s'; }
+
     return;
   }
   const states = {
@@ -165,8 +177,6 @@ function render(data) {
   const connected=configured.filter(x=>data.output_states?.[x.kind]==='forwarding').length;
   $('#output-description').textContent = (configured.length>1?`${connected} von ${configured.length} Ausgängen verbunden. `:'') + output[1] + ({waiting:' Die Browserquelle wartet auf einen freien Renderer dieses Servers.',starting:' Browserquelle wird gestartet …',error:' Browserquelle nicht erreichbar; erneuter Versuch folgt.',live:' Live-Browserquelle aktiv.'}[data.browser_status] || '');
   $('#output-dot').className = 'dot ' + output[2];
-  $('#active-source').textContent = data.selected === 1 ? (data.replay_id?'Wiederholung':'OBS') : data.selected === 2 ? 'Handy' : data.offline_playing ? 'Offline-Video' : data.enabled ? 'Standby / Verbindungsaufbau' : 'Offline-Video pausiert';
-  $('#source1 h3').textContent=data.replay_id?'Wiederholung · Source 1':'OBS';
   const activeRecording=data.recording?.active;
   $('#record-indicator').textContent=activeRecording?(activeRecording.status==='finishing'?'Wird abgeschlossen …':'● Aufnahme läuft'):'Keine Aufnahme';
   $('#record-start').disabled=busy||!online||!!activeRecording;
@@ -176,31 +186,12 @@ function render(data) {
   if(!renewalLoaded){$('#renew-interval').value=String(data.renewal.interval);$('#renew-gap').value=String(data.renewal.gap);renewalLoaded=true;}
   $('#renew-now').disabled=busy||!data.enabled||data.state==='renewing';
   $('#renew-note').textContent=data.renewal.resume?`Neuverbindung läuft. Wiederaufbau ab ${new Date(data.renewal.resume*1000).toLocaleTimeString('de-DE')}.`:data.renewal.next?`Nächste geplante Neuverbindung: ${new Date(data.renewal.next*1000).toLocaleString('de-DE')}.`:data.renewal.interval?'Automatik aktiviert; der Timer beginnt bei bestehender Verbindung.':'Automatische Neuverbindung ist ausgeschaltet.';
-  if (data.offline_video) $('#program-hint').textContent = `Ausgewähltes Offline-Video: ${data.offline_video.name}. ` + (data.offline_video.browser_enabled ? 'Browserquelle aktiviert – sie startet bei verbundenem Ausgang, sobald beide Live-Quellen fehlen.' : 'Bei diesem Video ist keine Browserquelle aktiviert.');
-  const programFrame = $('#source3 iframe');
-  const programButton = $('#source3 .preview-toggle');
-  const previewAvailable = data.available && (data.selected > 0 || data.offline_playing || data.state === 'forwarding');
-  programFrame.hidden = currentView!=='dashboard' || !programPreviewWanted || !previewAvailable;
-  if (!programFrame.hidden && !programFrame.hasAttribute('src')) programFrame.src = '/preview/3/';
-  if (programFrame.hidden) programFrame.src = 'about:blank';
-  $('#source3 .placeholder p').textContent = !previewAvailable ? (data.enabled ? 'Verbindung wird aufgebaut. Dein Video bleibt bis dahin pausiert.' : 'Ausgang pausiert. Ohne Live-Quelle läuft hier kein Offline-Video.') : 'Vorschau geschlossen';
-  programButton.disabled = !previewAvailable;
-  programButton.textContent = !previewAvailable ? 'Vorschau pausiert' : programPreviewWanted ? 'Vorschau schließen' : 'Vorschau öffnen';
+  window.StreamDeskRouting?.program(data);
   const destination = effectiveOutputs(data).map(x=>platformName(x.kind)).join(' + ')||'Keine Ziele ausgewählt';
-  $('#destination').textContent = destination;
-  $('#output-kind').textContent = destination;
+  $('#output-kind').textContent = configured.length>1?configured.length+' Ausgänge':destination;
   $('#account').textContent = data.output.account ? `Twitch-Konto: ${data.output.account}` : data.output.configured ? 'Ausgang ist eingerichtet.' : 'Noch kein Ausgang eingerichtet.';
   $('#oauth-note').textContent = data.oauth_ready ? 'Verbinde deinen Account über Twitch. Der Stream startet erst auf deinen Klick.' : 'Die Twitch-App muss noch einmalig vom Administrator eingerichtet werden. Ein Streamschlüssel funktioniert bereits.';
   $('#oauth').setAttribute('aria-disabled', data.enabled ? 'true' : 'false');
-  for (let i = 1; i <= 2; i++) {
-    const source = data.sources[i - 1];
-    const label = {online:'Online',offline:'Offline',stalled:'Keine Daten'}[source.state];
-    const selected = data.selected === i;
-    $(`#source${i} .badge`).textContent = selected ? (data.enabled ? '● Auf Sendung' : '● Ausgewählt') : label;
-    $(`#source${i} .badge`).className = 'badge ' + source.state;
-    $(`#source${i}`).classList.toggle('selected', selected);
-    $(`#source${i} .rate`).textContent = source.state === 'offline' ? '— Mbit/s' : source.mbps.toLocaleString('de-DE', {minimumFractionDigits:2,maximumFractionDigits:2}) + ' Mbit/s';
-  }
   $('#upload-meter').hidden = !transfer;
   $('#upload-state').textContent = transfer ? `Datei wird hochgeladen: ${transfer.percent} %${transfer.percent === 100 ? ' – wird auf dem Server geprüft …' : ''}` : data.upload.message || 'Standard-Offline-Video ist eingerichtet.';
   $('#upload-state').classList.toggle('error', data.upload.state === 'error');
@@ -287,8 +278,8 @@ $('#metadata-form').addEventListener('submit',event=>{
 $('#kind').addEventListener('change', () => { $('#output-form [name=key]').placeholder=$('#kind').value==='youtube'?'xxxx-xxxx-xxxx-xxxx':'live_…'; $('#key-label').hidden=$('#kind').value==='custom'; $('#url-label').hidden=$('#kind').value!=='custom'; });
 for (const button of document.querySelectorAll('.preview-toggle')) {
   button.addEventListener('click', () => {
-    if (button.dataset.slot === '3') { programPreviewWanted = !programPreviewWanted; if (state) render(state); return; }
-    const frame = $(`#source${button.dataset.slot} iframe`);
+    if (button.dataset.slot === '3') { programPreviewWanted = !programPreviewWanted; if (state) window.StreamDeskRouting?.program(state); return; }
+    const frame = button.closest('article').querySelector('iframe');
     frame.hidden = !frame.hidden;
     if (!frame.hidden) frame.src = `/preview/${button.dataset.slot}/`;
     else frame.src = 'about:blank';
@@ -379,7 +370,7 @@ async function loadRecordings(force=false){
     if(!force&&signature===recordingSignature)return;
     if(!force&&[...document.querySelectorAll('#recording-list video')].some(v=>!v.paused))return;
     recordingSignature=signature;const list=$('#recording-list');list.replaceChildren();
-    if(!data.recordings.length){const empty=document.createElement('p');empty.className='small muted';empty.textContent='Noch keine Aufnahmen. Es wird nichts automatisch aufgezeichnet.';list.append(empty);}
+    if(!data.recordings.length){const empty=document.createElement('p');empty.className='small muted';empty.textContent='Noch keine manuellen Aufnahmen. Native MediaMTX-Segmente werden separat angezeigt.';list.append(empty);}
     for(const recording of data.recordings){
       const card=document.createElement('article');card.className='video-card';card.dataset.recordingId=recording.id;
       const title=document.createElement('h3');title.textContent=recording.name;card.append(title);
@@ -419,8 +410,9 @@ function form(id, endpoint, message, done) {
         return;
       }
     }
+    const values = Object.fromEntries(new FormData(element));
     action(async () => {
-      await api(endpoint,Object.fromEntries(new FormData(element)));
+      await api(endpoint,values);
       for (const field of element.querySelectorAll('input[type=password]')) field.value='';
       if (done) await done();
     },message,element);
@@ -428,7 +420,7 @@ function form(id, endpoint, message, done) {
 }
 form('#output-form','/api/output','Streamschlüssel gespeichert. Wähle oben die gewünschten Plattformen und speichere die Streaming-Auswahl.');
 form('#password-form','/api/password','Dein Passwort wurde geändert.');
-form('#user-form','/api/admin/users','Benutzer mit zwei Quellen angelegt.',loadAdmin);
+form('#user-form','/api/admin/users','Benutzer mit Live-Quellen angelegt.',loadAdmin);
 form('#oauth-form','/api/admin/oauth','Twitch-App gespeichert.',loadAdmin);
 form('#google-form','/api/admin/google','Google-App gespeichert.',loadAdmin);
 function uploadVideo(file) {
@@ -468,19 +460,6 @@ $('#upload-form').addEventListener('submit', event => {
     finally { transfer = null; if (state) render(state); }
   }, 'Datei angekommen. Der Verarbeitungsstatus steht direkt darunter.', $('#upload-form'));
 });
-$('#load-ingest').addEventListener('click', () => action(async () => {
-  const data = await api('/api/ingest');
-  const container = $('#ingest-content');
-  container.replaceChildren();
-  for (const [title,value] of [['OBS → Server (vollständige Adresse; Streamschlüssel leer lassen)',data.rtmp],['Medien-Benutzername',data.username],['Medien-Passwort',data.password],['Handy → SRT-Adresse',data.srt],['Handy → Stream-ID (wenn separat gefragt)',data.stream_id]]) {
-    const label = document.createElement('label');label.textContent=title;
-    const code = document.createElement('code');code.textContent=value;label.append(code);
-    const button = document.createElement('button');button.className='ghost';button.textContent='Kopieren';
-    button.addEventListener('click', async () => { try { await navigator.clipboard.writeText(value);notify('Kopiert.'); } catch (_) { notify('Bitte den Text markieren und manuell kopieren.',true); } });
-    label.append(button);container.append(label);
-  }
-  const hide=document.createElement('button');hide.className='secondary';hide.textContent='Zugangsdaten verbergen';hide.addEventListener('click',()=>location.reload());container.append(hide);
-}));
 async function loadAdmin() {
   const data = await api('/api/admin');
   $('#client-id').value=data.client_id;
@@ -493,33 +472,46 @@ async function loadAdmin() {
   for(const user of data.users) {
     const row=document.createElement('div');row.className='user-row';
     const label=document.createElement('span');label.textContent=user.username+(user.admin?' · Admin':'')+(!user.active?' · deaktiviert':'');row.append(label);
-    if(!user.admin) { const button=document.createElement('button');button.className='ghost';button.textContent=user.active?'Deaktivieren':'Aktivieren';button.addEventListener('click',()=>action(async()=>{await api(`/api/admin/users/${user.id}/toggle`,{});await loadAdmin();},'Benutzer aktualisiert.'));row.append(button); }
+    if(user.id!==data.current_user_id){
+      const toggle=document.createElement('button');toggle.type='button';toggle.className='ghost';toggle.textContent=user.active?'Deaktivieren':'Aktivieren';
+      toggle.addEventListener('click',()=>action(async()=>{await api(`/api/admin/users/${user.id}/toggle`,{});await loadAdmin();},'Benutzer aktualisiert.'));row.append(toggle);
+      if(!user.active){
+        const remove=document.createElement('button');remove.type='button';remove.className='danger';remove.textContent='Benutzer löschen';
+        const confirmation=document.createElement('div');confirmation.className='delete-confirm';confirmation.hidden=true;
+        const note=document.createElement('p');note.textContent='Konto und Zugänge werden gelöscht. Vorhandene Mediendateien bleiben separat archiviert. Zur Bestätigung den Benutzernamen eingeben.';
+        const input=document.createElement('input');input.placeholder=user.username;input.autocomplete='off';input.setAttribute('aria-label','Benutzernamen zum Löschen bestätigen');
+        const yes=document.createElement('button');yes.type='button';yes.className='danger';yes.textContent='Konto löschen';
+        yes.addEventListener('click',()=>action(async()=>{await api(`/api/admin/users/${user.id}/delete`,{confirm:input.value.trim()});await loadAdmin();},'Deaktivierter Benutzer gelöscht; Medien archiviert.',confirmation));
+        const cancel=document.createElement('button');cancel.type='button';cancel.className='ghost';cancel.textContent='Abbrechen';cancel.addEventListener('click',()=>confirmation.hidden=true);
+        confirmation.append(note,input,yes,cancel);remove.addEventListener('click',()=>{confirmation.hidden=!confirmation.hidden;if(!confirmation.hidden)input.focus();});row.append(remove,confirmation);
+      }
+    }
     list.append(row);
   }
 }
 $('#admin')?.addEventListener('toggle', () => { if($('#admin').open) loadAdmin().catch(error=>notify(error.message,true)); });
-function platformName(kind){return {twitch:'Twitch',youtube:'YouTube',custom:'Eigener Anbieter'}[kind]||kind;}
+function platformName(kind){return state?.outputs?.find(row=>row.kind===kind)?.label||{twitch:'Twitch',youtube:'YouTube',custom:'Eigener Anbieter'}[kind]||kind;}
 function effectiveOutputs(data){return (data.outputs||[]).filter(x=>data.enabled?data.output_states?.[x.kind]&&data.output_states[x.kind]!=='stopped':x.selected);}
 function renderDestinations(data){
   const destinations=data.outputs||[];const selected=effectiveOutputs(data);
   const signature=JSON.stringify(destinations);
   if(signature!==targetSignature){
     targetSignature=signature;const list=$('#target-list');list.replaceChildren();
-    for(const kind of ['twitch','youtube','custom']){
+    for(const kind of ['twitch','youtube','custom',...destinations.filter(row=>!['twitch','youtube','custom'].includes(row.kind)).map(row=>row.kind)]){
       const destination=destinations.find(x=>x.kind===kind);const row=document.createElement('div');row.className='target-item';
       const label=document.createElement('label');const input=document.createElement('input');input.type='checkbox';input.dataset.outputKind=kind;input.checked=!!destination?.selected;input.disabled=!destination||busy;
       label.append(input,document.createTextNode(platformName(kind)));row.append(label);
-      const badge=document.createElement('span');badge.className='badge';badge.textContent=destination?'Eingerichtet':'Schlüssel fehlt';row.append(badge);
-      if(destination){const remove=document.createElement('button');remove.type='button';remove.className='ghost';remove.textContent='Schlüssel löschen';remove.dataset.removeOutput=kind;remove.disabled=data.enabled;remove.addEventListener('click',()=>action(()=>api(`/api/outputs/${kind}/delete`,{}),'Streamschlüssel entfernt.',$('#targets-form')));row.append(remove);}
+      const badge=document.createElement('span');badge.className='badge';badge.textContent=destination?.configured!==false&&destination?'Eingerichtet':'Schlüssel fehlt';row.append(badge);
+      if(destination&&['twitch','youtube','custom'].includes(kind)){const remove=document.createElement('button');remove.type='button';remove.className='ghost';remove.textContent='Schlüssel löschen';remove.dataset.removeOutput=kind;remove.disabled=data.enabled;remove.addEventListener('click',()=>action(()=>api(`/api/outputs/${kind}/delete`,{}),'Streamschlüssel entfernt.',$('#targets-form')));row.append(remove);}
       list.append(row);
     }
   }
-  for(const input of document.querySelectorAll('[data-output-kind]'))input.disabled=busy||!destinations.some(d=>d.kind===input.dataset.outputKind);
+  for(const input of document.querySelectorAll('[data-output-kind]'))input.disabled=busy||!destinations.some(d=>d.kind===input.dataset.outputKind&&d.configured!==false);
   for(const remove of document.querySelectorAll('[data-remove-output]'))remove.disabled=data.enabled||busy;
   $('#save-targets').disabled=busy;
   const saved=destinations.filter(x=>x.selected).map(x=>platformName(x.kind)).join(' + ')||'Keine Plattform';
   if($('#target-summary'))$('#target-summary').textContent='Gespeichert für den nächsten Start: '+saved+(data.enabled?' · Aktueller Stream läuft unverändert weiter.':'');
-  for(const preset of document.querySelectorAll('[data-target-preset]'))preset.disabled=busy||preset.dataset.targetPreset.split(',').filter(Boolean).some(kind=>!destinations.some(d=>d.kind===kind));
+  for(const preset of document.querySelectorAll('[data-target-preset]'))preset.disabled=busy||preset.dataset.targetPreset.split(',').filter(Boolean).some(kind=>!destinations.some(d=>d.kind===kind&&d.configured!==false));
   const health=$('#destination-health');health.replaceChildren();
   for(const destination of selected){const status=data.output_states?.[destination.kind]||'stopped';const badge=document.createElement('span');badge.className='destination-pill '+status;badge.textContent=platformName(destination.kind)+' · '+({forwarding:'Verbunden',stopped:'Gestoppt',error:'Fehler',connecting:'Verbinde …',renewing:'Neuverbindung'})[status];health.append(badge);}
   const connected=data.chat||{};

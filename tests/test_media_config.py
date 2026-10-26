@@ -68,6 +68,48 @@ class MediaConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             merge_auth(config, 'streamdesk', [])
 
+    def test_runtime_sync_handles_path_added_by_file_watcher(self):
+        class AlreadyExists(Exception):
+            status=400
+        name='streamdesk/admin/source1'
+        config={'authInternalUsers':[],'paths':{name:{'source':'publisher','record':False}}}
+        calls=[]
+        listings=0
+        def api(path,value=None,method=None):
+            nonlocal listings
+            calls.append(path)
+            if path=='config/global/get':return {'authInternalUsers':[]}
+            if path.startswith('config/paths/list'):
+                listings+=1
+                return {'items':[] if listings==1 else [{'name':name,'source':'publisher','record':False}]}
+            if path.startswith('config/paths/add'):raise AlreadyExists()
+            return {}
+        synchronize_runtime(api,config,'streamdesk')
+        self.assertEqual(listings,2)
+        self.assertFalse(any(path.startswith('config/paths/patch') for path in calls))
+
+    def test_recovery_runtime_cleanup_is_limited_to_obsolete_owned_paths(self):
+        config={'authInternalUsers':[],'paths':{'camera':{'source':'publisher'},'streamdesk/admin/source1':{'source':'publisher'}}}
+        calls=[]
+        def api(path,value=None,method=None):
+            calls.append((path,method))
+            if path=='config/global/get':return {'authInternalUsers':[]}
+            if path.startswith('config/paths/list'):
+                return {'items':[{'name':name,'source':'publisher'} for name in ('camera','streamdesk/admin/source1','streamdesk/old/live')]}
+            return {}
+        synchronize_runtime(api,config,'streamdesk',obsolete_paths=['camera','streamdesk/admin/source1','streamdesk/old/live'])
+        self.assertEqual([path for path,method in calls if method=='DELETE'],['config/paths/delete/streamdesk/old/live'])
+
+    def test_recovery_runtime_cleanup_accepts_path_already_removed_by_file_watcher(self):
+        class Missing(Exception):
+            status=404
+        def api(path,value=None,method=None):
+            if path=='config/global/get':return {'authInternalUsers':[]}
+            if path.startswith('config/paths/list'):return {'items':[{'name':'streamdesk/old/live'}]}
+            if method=='DELETE':raise Missing()
+            return {}
+        synchronize_runtime(api,{'authInternalUsers':[],'paths':{}},'streamdesk',obsolete_paths=['streamdesk/old/live'])
+
     def test_rejects_external_auth_and_unbounded_custom_regex(self):
         config = self.base()
         config['authMethod'] = 'jwt'
@@ -91,3 +133,14 @@ class MediaConfigTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class PaginationTests(unittest.TestCase):
+    def test_all_runtime_pages_are_read_for_archived_program_catalogs(self):
+        from media_config import list_items
+        calls=[]
+        def api(path):
+            calls.append(path)
+            return {'pageCount':2,'items':[{'name':'first'}] if '&page=' not in path else [{'name':'source1'}]}
+        self.assertEqual([row['name'] for row in list_items(api,'paths/list')],['first','source1'])
+        self.assertEqual(calls,['paths/list?itemsPerPage=1000','paths/list?itemsPerPage=1000&page=1'])
