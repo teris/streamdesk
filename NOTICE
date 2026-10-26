@@ -1,0 +1,6 @@
+YouTube Live Chat gRPC protocol:
+stream_list.proto and generated stream_list_pb2.py / stream_list_pb2_grpc.py derive from Google's sample at:
+https://developers.google.com/youtube/data/live/streaming-live-chat
+Google developer documentation code samples are licensed under the Apache License, Version 2.0:
+https://www.apache.org/licenses/LICENSE-2.0
+The supplied proto adds the missing google/protobuf/duration.proto import.

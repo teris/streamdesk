@@ -1,0 +1,565 @@
+<!doctype html>
+<html lang="de">
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <meta name="csrf-token" content="{{csrf}}">
+    <meta name="public-url" content="{{public}}">
+    <title>Dashboard · MediaMTX - StreamDesk</title>
+    <link rel="stylesheet" href="/static/style.css?v=multi1">
+    <script src="/static/chat.js?v=multi1" defer></script>
+    <script src="/static/app.js?v=multi1" defer></script>
+</head>
+
+<body class="workspace">
+    <a class="skip-link" href="#workspace-main">Zum Inhalt</a>
+    <aside class="sidebar"><a class="brand" href="#dashboard"><span class="brand-mark">◧</span>MediaMTX - StreamDesk</a><span
+            class="workspace-label">DEIN STREAMING-STUDIO</span>
+        <nav class="side-menu" aria-label="Hauptmenü"><a class="menu-link" href="#dashboard"><svg viewBox="0 0 24 24"
+                    fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                    <rect x="3" y="3" width="7" height="7" rx="1.5" />
+                    <rect x="14" y="3" width="7" height="7" rx="1.5" />
+                    <rect x="3" y="14" width="7" height="7" rx="1.5" />
+                    <rect x="14" y="14" width="7" height="7" rx="1.5" />
+                </svg><span>Dashboard</span></a><a class="menu-link" href="#sources"><svg viewBox="0 0 24 24"
+                    fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                    <rect x="3" y="5" width="18" height="12" rx="2" />
+                    <path d="M8 21h8M12 17v4" />
+                </svg><span>Quellen</span></a>
+            <div class="menu-label">MEDIEN</div><a class="menu-link" href="#videos"><svg viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                    <rect x="3" y="4" width="18" height="16" rx="2" />
+                    <path d="m10 8 6 4-6 4z" />
+                </svg><span>Offline-Videos</span></a><a class="menu-link" href="#recordings"><svg viewBox="0 0 24 24"
+                    fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                    <circle cx="12" cy="12" r="9" />
+                    <circle cx="12" cy="12" r="3" />
+                </svg><span>Aufnahmen</span></a><a class="menu-link" href="#chat"><svg viewBox="0 0 24 24" fill="none"
+                    stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                    <path d="M4 4h16v12H9l-5 4z" />
+                    <path d="M8 8h8M8 12h5" />
+                </svg><span>Chat &amp; Widget</span></a>
+            <div class="menu-label">VERWALTUNG</div><a class="menu-link" href="#settings"><svg viewBox="0 0 24 24"
+                    fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                    <path d="M4 7h16M4 17h16" />
+                    <circle cx="9" cy="7" r="3" />
+                    <circle cx="15" cy="17" r="3" />
+                </svg><span>Einstellungen</span></a>{% if user.admin %}<a class="menu-link" href="#administration"><svg
+                    viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+                    <circle cx="9" cy="8" r="3" />
+                    <path d="M3 21v-3a6 6 0 0 1 12 0v3M16 5a3 3 0 0 1 0 6M18 15a5 5 0 0 1 3 5" />
+                </svg><span>Administration</span></a>{% endif %}
+        </nav>
+        <div class="sidebar-bottom"><span class="status-led"></span>
+            <div>Deine Regie steht bereit<small>OBS → Handy → Standby</small></div>
+        </div>
+    </aside>
+    <div class="workspace-shell">
+        <header class="workspace-header">
+            <div class="breadcrumb">Arbeitsplatz <span>/</span> <strong id="breadcrumb-title">Dashboard</strong></div>
+            <div class="header-account"><span class="connection" id="connection">● Verbinde …</span><span
+                    class="user-avatar" aria-hidden="true">{{user.username[0]|upper}}</span><span
+                    class="username">{{user.username}}</span><button id="logout" class="ghost">Abmelden</button></div>
+        </header>
+        <main id="workspace-main" tabindex="-1">
+            <div class="heading">
+                <div>
+                    <div class="eyebrow" id="view-eyebrow">ÜBERSICHT</div>
+                    <h1 id="view-title">Dein Stream auf einen Blick.</h1>
+                    <p class="muted" id="view-description">Signal, Sendezeit und Medien – alles an einem Ort.</p>
+                </div><span class="tag" id="updated">Wird aktualisiert …</span>
+            </div>
+            <div id="alert" role="alert" hidden></div>
+            <div id="toast" role="status" hidden></div>
+            <section class="app-view" data-view="dashboard" aria-label="Dashboard">
+                <div class="metrics-grid">
+                    <article class="metric-card">
+                        <div class="metric-label"><span class="metric-icon">↓</span>Empfang</div>
+                        <div class="metric-value" id="stat-receive">— <small>Mbit/s</small></div>
+                        <div class="metric-foot">OBS + Handy <svg class="sparkline" viewBox="0 0 120 24"
+                                aria-hidden="true">
+                                <polyline id="receive-line" />
+                            </svg></div>
+                    </article>
+                    <article class="metric-card">
+                        <div class="metric-label"><span class="metric-icon">↑</span>Ausgang</div>
+                        <div class="metric-value" id="stat-send">— <small>Mbit/s</small></div>
+                        <div class="metric-foot"><span id="stat-send-note">Zum Streamingziel</span><svg
+                                class="sparkline" viewBox="0 0 120 24" aria-hidden="true">
+                                <polyline id="send-line" />
+                            </svg></div>
+                    </article>
+                    <article class="metric-card">
+                        <div class="metric-label"><span class="metric-icon">▤</span>Dein Speicher</div>
+                        <div class="metric-value" id="stat-storage">—</div>
+                        <div class="metric-foot" id="stat-storage-note">Deine Videos und Aufnahmen</div>
+                        <div class="capacity-track" title="Belegung des gemeinsamen Servers"><span
+                                id="storage-capacity"></span></div>
+                    </article>
+                    <article class="metric-card">
+                        <div class="metric-label"><span class="metric-icon">◷</span><span id="session-label">Aktuelle
+                                Streamdauer</span></div>
+                        <div class="metric-value timer" id="stat-session">00:00:00</div>
+                        <div class="metric-foot" id="stat-session-note">Bereit für deinen nächsten Stream</div>
+                    </article>
+                </div>
+                <section class="broadcast panel">
+                    <div class="broadcast-left">
+                        <div class="eyebrow">AUSGANG</div>
+                        <div class="status-title"><span class="dot" id="output-dot"></span>
+                            <h2 id="output-state">Status wird geladen</h2>
+                        </div>
+                        <p class="muted" id="output-description">Verbindung zum Server wird geprüft.</p>
+                        <div class="route"><span id="active-source">—</span><span class="route-line">→</span><span
+                                id="destination">Twitch</span></div>
+                        <div id="destination-health" class="destination-health"></div>
+                    </div>
+                    <div class="broadcast-actions"><button class="primary" disabled="" id="start">▶ Stream
+                            starten</button><button class="danger" disabled="" id="stop">■ Stream stoppen</button>
+                        <p class="small muted">Stopp beendet nur die Weiterleitung.</p>
+                    </div>
+                </section>
+                <div class="dashboard-grid">
+                    <section aria-label="Ausgangsvorschau" class="panel program-preview" id="source3">
+                        <div class="section-heading">
+                            <div>
+                                <div class="eyebrow">PROGRAMM</div>
+                                <h2>Das geht an deinen Ausgang</h2>
+                            </div><span class="tag">Ausgangsvorschau</span>
+                        </div>
+                        <div class="preview">
+                            <div class="placeholder"><span>▣</span>
+                                <p>Vorschau deines fertigen Streams</p>
+                            </div><iframe allow="autoplay; fullscreen" hidden="" title="Ausgangsvorschau"></iframe>
+                        </div>
+                        <div class="source-footer">
+                            <p class="small muted" id="program-hint">Live-Quellen sind auch vor dem Start sichtbar. Ohne
+                                Ausgang bleibt das Offline-Video pausiert.</p><button class="ghost preview-toggle"
+                                data-slot="3">Vorschau schließen</button>
+                        </div>
+                    </section>
+                    <section class="panel studio-panel">
+                        <div class="studio-tabs" role="tablist" aria-label="Chat oder Kanalinformationen"><button
+                                type="button" id="studio-chat-tab" role="tab" aria-selected="true"
+                                aria-controls="studio-chat">Live-Chat</button><button type="button" id="studio-meta-tab"
+                                role="tab" aria-selected="false" aria-controls="twitch-metadata">Titel &amp;
+                                Spiel</button></div>
+                        <div id="studio-chat" role="tabpanel" aria-labelledby="studio-chat-tab">
+                            <div class="chat-component">
+                                <div class="chat-toolbar">
+                                    <h2>Live-Chat</h2><label class="sr-only" for="dash-chat-filter">Chat
+                                        filtern</label><select class="chat-filter" id="dash-chat-filter"
+                                        aria-label="Nachrichten anzeigen">
+                                        <option value="all">Twitch + YouTube</option>
+                                        <option value="twitch">Nur Twitch</option>
+                                        <option value="youtube">Nur YouTube</option>
+                                    </select>
+                                </div>
+                                <div class="chat-connections"><span class="chat-twitch-status">Twitch · Wird geprüft
+                                        …</span><span class="chat-youtube-status">YouTube · Wird geprüft …</span><a
+                                        class="chat-connect-link" href="#settings">Konten verbinden / Chat freigeben
+                                        →</a></div>
+                                <div class="chat-messages" role="log" aria-label="Chatnachrichten" aria-live="polite">
+                                    <p class="chat-empty">Verbinde deine Konten unter Einstellungen. Nachrichten
+                                        erscheinen hier plattformübergreifend.</p>
+                                </div>
+                                <form class="chat-compose"><label>Nachricht senden an<select class="chat-target">
+                                            <option value="both">Twitch und YouTube</option>
+                                            <option value="twitch">Nur Twitch</option>
+                                            <option value="youtube">Nur YouTube</option>
+                                        </select></label>
+                                    <div class="chat-input-row"><textarea class="chat-message" maxlength="200" rows="2"
+                                            placeholder="Deine Nachricht …" aria-label="Chatnachricht"
+                                            required></textarea><button class="primary chat-send" type="submit"
+                                            disabled>Senden</button></div>
+                                    <p class="chat-feedback small muted" role="status">Du schreibst als dein jeweils
+                                        verbundenes Konto.</p>
+                                </form>
+                            </div>
+                        </div>
+                        <section class="panel twitch-metadata" id="twitch-metadata" role="tabpanel"
+                            aria-labelledby="studio-meta-tab" hidden>
+                            <div class="section-heading">
+                                <div>
+                                    <div class="eyebrow">TWITCH</div>
+                                    <h2>Streamtitel &amp; Spiel</h2>
+                                </div><button class="ghost" id="load-channel" type="button">Aktuelle Twitch-Daten
+                                    laden</button>
+                            </div>
+                            <p class="small muted" id="twitch-meta-note">Twitch-Verbindung wird geprüft …</p><a
+                                class="twitch-button" href="/oauth/twitch" id="metadata-connect">Twitch für Titel und
+                                Kategorie erneut verbinden ↗</a>
+                            <form id="metadata-form"><label>Streamtitel <span class="small muted">Maximal 140 Zeichen ·
+                                        leer lassen, um den Titel beizubehalten</span><input id="stream-title"
+                                        maxlength="140" name="title"
+                                        placeholder="Worum geht es in deinem Stream?" /></label><label>Spiel / Kategorie
+                                    suchen<div class="category-search"><input autocomplete="off" id="category-query"
+                                            maxlength="100" placeholder="z. B. Minecraft oder Just Chatting" /><button
+                                            class="secondary" id="category-search" type="button">Suchen</button></div>
+                                    </label><label>Kategorie auswählen<select id="category-results" name="game_id">
+                                        <option value="">Kategorie unverändert lassen</option>
+                                        <option value="0">Keine Kategorie</option>
+                                    </select></label>
+                                <p class="small muted" id="category-note" role="status"></p><button class="primary"
+                                    disabled="" id="save-channel" type="submit">Auf Twitch speichern</button>
+                            </form>
+                        </section>
+                    </section>
+                </div>
+                <div class="media-summary"><a class="summary-tile" href="#recordings"><span
+                            class="summary-icon">◉</span>
+                        <div><span>Deine Aufnahmen</span><strong id="stat-recordings">—</strong><small
+                                id="stat-recordings-note">Gespeicherte Videolänge</small></div><span
+                            class="tile-arrow">↗</span>
+                    </a><a class="summary-tile" href="#videos"><span class="summary-icon">▣</span>
+                        <div><span>Deine Standby-Videos</span><strong id="stat-videos">—</strong><small
+                                id="stat-videos-note">Gespeicherte Videolänge</small></div><span
+                            class="tile-arrow">↗</span>
+                    </a>
+                    <div class="summary-tile"><span class="summary-icon">◷</span>
+                        <div><span>Gesamte Sendezeit</span><strong id="stat-total-time">00:00:00</strong><small
+                                id="stat-total-note">Wird ab diesem Update erfasst</small></div>
+                    </div>
+                </div>
+                <div class="dashboard-bottom">
+                    <div class="source-pills"><a href="#sources" id="dash-source1" class="source-pill">● OBS · Prüfe
+                            …</a><a href="#sources" id="dash-source2" class="source-pill">● Handy · Prüfe …</a><span
+                            class="source-pill" id="dash-recording">Keine Aufnahme</span></div><a href="#settings"
+                        class="text-link">Ausgang &amp; Verbindung verwalten →</a>
+                </div>
+            </section>
+            <section class="app-view" data-view="sources" aria-label="Quellen" hidden>
+                <section class="sources">
+                    <article class="panel source" id="source1">
+                        <div class="source-heading">
+                            <div><span class="source-number">01</span>
+                                <h3>OBS</h3>
+                            </div><span class="badge">Prüfe …</span>
+                        </div>
+                        <div class="preview">
+                            <div class="placeholder"><span>▣</span>
+                                <p>Bildvorschau bei Bedarf öffnen</p>
+                            </div><iframe allow="autoplay; fullscreen" hidden="" title="OBS Vorschau"></iframe>
+                        </div>
+                        <div class="source-footer"><span class="rate">— Mbit/s</span><button
+                                class="ghost preview-toggle" data-slot="1">Vorschau öffnen</button></div>
+                        <p class="small muted">Bevorzugte Quelle · RTMP</p>
+                    </article>
+                    <article class="panel source" id="source2">
+                        <div class="source-heading">
+                            <div><span class="source-number">02</span>
+                                <h3>Handy</h3>
+                            </div><span class="badge">Prüfe …</span>
+                        </div>
+                        <div class="preview">
+                            <div class="placeholder"><span>▯</span>
+                                <p>Bildvorschau bei Bedarf öffnen</p>
+                            </div><iframe allow="autoplay; fullscreen" hidden="" title="Handy Vorschau"></iframe>
+                        </div>
+                        <div class="source-footer"><span class="rate">— Mbit/s</span><button
+                                class="ghost preview-toggle" data-slot="2">Vorschau öffnen</button></div>
+                        <p class="small muted">Ersatzquelle · SRT</p>
+                    </article>
+                </section>
+                <details class="panel wide-details">
+                    <summary>Verbindungsdaten für OBS und Handy <span>Deine privaten Eingänge</span></summary>
+                    <div id="ingest-content"><button class="secondary" id="load-ingest">Zugangsdaten anzeigen</button>
+                    </div>
+                    <p class="small muted">OBS und Handy: H.264 · AAC Stereo · 48 kHz · möglichst 1080p30. Zugangsdaten
+                        nur in deinen Streaming-Apps verwenden.</p>
+                </details>
+            </section>
+            <section class="app-view" data-view="videos" aria-label="Offline-Videos" hidden>
+                <details class="panel upload-drawer">
+                    <summary>＋ Neues Offline-Video hochladen <span>MP4 · bis 500 MB</span></summary>
+                    <article class="panel">
+                        <div class="section-heading">
+                            <h2>Offline-Video</h2><span class="tag">Dauerschleife</span>
+                        </div>
+                        <p class="muted small">Wird gezeigt, wenn beide Quellen fehlen. Eine aktive Twitch-Verbindung
+                            bleibt dabei bestehen.</p>
+                        <form id="upload-form"><label class="upload-box">↑ <strong>MP4-Datei auswählen</strong><input
+                                    accept="video/mp4,.mp4" name="video" required="" type="file" /><span
+                                    class="small muted">Max. 500 MB · 5 Minuten · Ton wird übernommen, falls
+                                    vorhanden</span></label><button class="secondary" id="upload-button"
+                                type="submit">Zur Bibliothek hinzufügen</button></form><progress
+                            aria-label="Upload-Fortschritt" hidden="" id="upload-meter" max="100" value="0"></progress>
+                        <p class="small muted" id="upload-state">Deine Videos bleiben in deiner persönlichen Bibliothek.
+                        </p>
+                        <div class="progress" hidden="" id="upload-progress"><span></span></div>
+                    </article>
+                </details>
+                <section class="panel video-library">
+                    <div class="section-heading">
+                        <div>
+                            <div class="eyebrow">DEINE MEDIEN</div>
+                            <h2>Meine Offline-Videos</h2>
+                        </div><span class="tag" id="library-count">Lade …</span>
+                    </div>
+                    <p class="small muted">Neue Uploads bleiben gespeichert. Wähle das Video für deinen Offline-Modus.
+                        Zum Wechseln den Ausgang stoppen; nicht ausgewählte Videos kannst du löschen.</p>
+                    <div id="video-list">Bibliothek wird geladen …</div>
+                    <p class="small muted" id="library-feedback" role="status"></p>
+                    <details>
+                        <summary>Text und Browser-Overlays</summary>
+                        <p class="small muted">Pro Video kannst du bis zu drei Textzeilen einmalig einrechnen lassen.
+                            Links im Text sind sichtbare Beschriftungen. Eine StreamElements-Adresse gehört in die
+                            Live-Browserquelle der jeweiligen Videokarte. Sie wird bei verbundener Offline-Sendung live
+                            über das Video gelegt.</p>
+                    </details>
+                </section>
+            </section>
+            <section class="app-view" data-view="recordings" aria-label="Aufnahmen" hidden>
+                <section class="panel recording-panel">
+                    <div class="section-heading">
+                        <div>
+                            <div class="eyebrow">MANUELLE AUFNAHME</div>
+                            <h2>Aufnehmen &amp; Wiederholen</h2>
+                        </div><span class="tag" id="record-indicator">Keine Aufnahme</span>
+                    </div>
+                    <p class="small muted">Aufnahmen und Wiederholungen starten ausschließlich auf deinen Klick. Beim
+                        Wiederholen übernimmt die Aufnahme Source 1 und zeigt oben links „Wiederholung“.</p>
+                    <div class="record-controls"><label>Aufnahmequelle<select id="record-source">
+                                <option value="live">Fertiger Ausgang</option>
+                                <option value="source1">Source 1 · OBS / Wiederholung</option>
+                                <option value="source2">Source 2 · Handy</option>
+                            </select></label><button class="primary" id="record-start">● Aufnahme
+                            starten</button><button class="danger" disabled="" id="record-stop">■ Aufnahme
+                            beenden</button><button class="secondary" disabled="" id="replay-stop">Wiederholung
+                            beenden</button></div>
+                    <p class="small muted" id="record-note" role="status"></p>
+                    <div id="recording-list">Aufnahmen werden geladen …</div>
+                </section>
+            </section>
+            <section class="app-view" data-view="chat" aria-label="Chat und Widget" hidden>
+                <div class="chat-page-grid">
+                    <section class="panel full-chat">
+                        <div class="chat-component">
+                            <div class="chat-toolbar">
+                                <h2>Live-Chat</h2><label class="sr-only" for="full-chat-filter">Chat
+                                    filtern</label><select class="chat-filter" id="full-chat-filter"
+                                    aria-label="Nachrichten anzeigen">
+                                    <option value="all">Twitch + YouTube</option>
+                                    <option value="twitch">Nur Twitch</option>
+                                    <option value="youtube">Nur YouTube</option>
+                                </select>
+                            </div>
+                            <div class="chat-connections"><span class="chat-twitch-status">Twitch · Wird geprüft
+                                    …</span><span class="chat-youtube-status">YouTube · Wird geprüft …</span><a
+                                    class="chat-connect-link" href="#settings">Konten verbinden / Chat freigeben →</a>
+                            </div>
+                            <div class="chat-messages" role="log" aria-label="Chatnachrichten" aria-live="polite">
+                                <p class="chat-empty">Verbinde deine Konten unter Einstellungen. Nachrichten erscheinen
+                                    hier plattformübergreifend.</p>
+                            </div>
+                            <form class="chat-compose"><label>Nachricht senden an<select class="chat-target">
+                                        <option value="both">Twitch und YouTube</option>
+                                        <option value="twitch">Nur Twitch</option>
+                                        <option value="youtube">Nur YouTube</option>
+                                    </select></label>
+                                <div class="chat-input-row"><textarea class="chat-message" maxlength="200" rows="2"
+                                        placeholder="Deine Nachricht …" aria-label="Chatnachricht"
+                                        required></textarea><button class="primary chat-send" type="submit"
+                                        disabled>Senden</button></div>
+                                <p class="chat-feedback small muted" role="status">Du schreibst als dein jeweils
+                                    verbundenes Konto.</p>
+                            </form>
+                        </div>
+                    </section>
+                    <section class="panel widget-settings">
+                        <div class="eyebrow">OBS · STREAMLABS · BROWSER</div>
+                        <h2>Dein Chat-Widget</h2>
+                        <p class="small muted">Als benutzerdefiniertes Browser-Dock öffnen, um den Chat in deiner
+                            Streamingsoftware zu lesen. Als Browserquelle lässt er sich auch ins Bild legen. Schreiben
+                            erfolgt hier im Dashboard.</p><button class="secondary" type="button"
+                            id="widget-load">Widget-Link anzeigen</button><label>Privater, nur lesender Link<input
+                                id="widget-url" type="text" readonly autocomplete="off" spellcheck="false"
+                                placeholder="Link zuerst anzeigen"></label><label>Plattformen<select
+                                id="widget-platform">
+                                <option value="all">Twitch und YouTube</option>
+                                <option value="twitch">Nur Twitch</option>
+                                <option value="youtube">Nur YouTube</option>
+                            </select></label><label class="checkbox-label">Transparenter Hintergrund<input
+                                id="widget-transparent" type="checkbox"></label>
+                        <div class="video-actions"><button class="secondary" id="widget-copy" type="button"
+                                disabled>Link kopieren</button><button class="ghost" id="widget-open" type="button"
+                                disabled>Widget öffnen ↗</button></div>
+                        <p class="small muted">Jeder mit diesem Link kann deinen Chat lesen. Kontoschlüssel und
+                            Schreibrechte werden nicht übertragen.</p>
+                        <details>
+                            <summary>Widget-Link erneuern</summary>
+                            <p class="small muted">Der bisherige Link wird sofort ungültig. Danach den neuen Link in
+                                deiner Streamingsoftware einsetzen.</p><button type="button" class="danger"
+                                id="widget-rotate">Neuen Link erstellen</button>
+                        </details>
+                    </section>
+                </div>
+            </section>
+            <section class="app-view" data-view="settings" aria-label="Einstellungen" hidden>
+                <div class="settings-columns">
+                    <div>
+                        <article class="panel">
+                            <div class="section-heading">
+                                <h2>Streaming-Ausgänge</h2><span class="tag" id="output-kind">Twitch</span>
+                            </div>
+                            <form id="targets-form">
+                                <h3>Beim nächsten Stream senden an</h3>
+                                <p class="small muted">Die Konten bleiben verbunden. Du entscheidest unabhängig davon,
+                                    welche Plattformen den Stream erhalten.</p>
+                                <div class="target-presets"><button type="button" class="secondary"
+                                        data-target-preset="twitch">Nur Twitch</button><button type="button"
+                                        class="secondary" data-target-preset="youtube">Nur YouTube</button><button
+                                        type="button" class="secondary" data-target-preset="twitch,youtube">Twitch +
+                                        YouTube</button><button type="button" class="ghost" data-target-preset="">Kein
+                                        Ziel</button></div>
+                                <div id="target-list" class="target-list"></div><button class="primary" type="submit"
+                                    id="save-targets">Streaming-Auswahl speichern</button>
+                                <p id="target-summary" class="small" role="status"></p>
+                                <p class="small muted">Die gespeicherte Auswahl gilt beim nächsten Start. Ein laufender
+                                    Stream wird durch das Speichern nicht verändert.</p>
+                            </form>
+                            <div class="platform-connections"><a class="youtube-button" href="/oauth/youtube"
+                                    id="youtube-oauth">YouTube-Konto verbinden ↗</a>
+                                <p class="small muted" id="youtube-account">YouTube wird geprüft …</p>
+                                <div class="youtube-broadcast-controls"><button type="button" class="secondary"
+                                        id="yt-load">YouTube-Sendungen laden</button><label>Eigene
+                                        YouTube-Sendung<select id="yt-broadcasts">
+                                            <option value="">Bitte Sendungen laden</option>
+                                        </select></label>
+                                    <div class="video-actions"><button type="button" class="secondary"
+                                            id="yt-select-chat">Für Chat auswählen</button><button type="button"
+                                            class="secondary" id="yt-use-output">Streamschlüssel übernehmen</button>
+                                    </div>
+                                    <p class="small muted" id="yt-note">Sendungen im YouTube Studio anlegen. Es wird
+                                        keine Sendung automatisch veröffentlicht.</p>
+                                </div><button type="button" class="ghost" id="youtube-disconnect">YouTube-Konto
+                                    trennen</button><button type="button" class="ghost"
+                                    id="twitch-disconnect">Twitch-Konto trennen</button>
+                            </div>
+                            <p class="muted small" id="account">Noch kein Konto verbunden.</p><a class="twitch-button"
+                                href="/oauth/twitch" id="oauth">Mit Twitch verbinden ↗</a>
+                            <p class="small muted" id="oauth-note">Kontoverbindung wird geprüft.</p>
+                            <details>
+                                <summary>Streamschlüssel oder anderes Ziel verwenden</summary>
+                                <form id="output-form"><label>Ausgang<select id="kind" name="kind">
+                                            <option value="twitch">Twitch mit Streamschlüssel</option>
+                                            <option value="youtube">YouTube mit Streamschlüssel</option>
+                                            <option value="custom">Anderer Ausgang</option>
+                                        </select></label><label id="key-label">Streamschlüssel<input autocomplete="off"
+                                            name="key" placeholder="live_…" type="password" /></label><label hidden=""
+                                        id="url-label">Zieladresse<input autocomplete="off" name="url"
+                                            placeholder="rtmps://server/app#streamkey" type="text" /></label>
+                                    <p class="small muted">Bei RTMP den Streamschlüssel mit # von der Serveradresse
+                                        trennen.</p><button class="secondary" type="submit">Ausgang speichern</button>
+                                </form>
+                            </details><button class="ghost quiet" id="disconnect">Alle Streamschlüssel
+                                entfernen</button>
+                        </article>
+                        <section class="panel wide-details">
+                            <h2>Mein Passwort ändern</h2>
+                            <form class="password-form" id="password-form">
+                                <p class="small muted">Das neue Passwort benötigt mindestens 12 Zeichen.</p>
+                                <label>Bisheriges Passwort<input autocomplete="current-password" name="current"
+                                        required="" type="password" /></label><label>Neues Passwort<input
+                                        autocomplete="new-password" minlength="12" name="password"
+                                        placeholder="Mindestens 12 Zeichen" required=""
+                                        type="password" /></label><button class="secondary" type="submit">Passwort
+                                    ändern</button>
+                            </form>
+                        </section>
+                    </div>
+                    <section class="panel renewal-panel">
+                        <div class="section-heading">
+                            <h2>24/7 · Verbindung erneuern</h2><span class="tag">Standardmäßig aus</span>
+                        </div>
+                        <p class="small muted">Erneuert nur die Verbindung zum Streamingziel. Deine lokalen Quellen,
+                            Wiederholung und Aufnahme laufen weiter. Eine neue Twitch-Sendung erfordert eine Trennung;
+                            Zuschauer können dabei eine Unterbrechung sehen. Kurze Neuverbindungen garantieren keinen
+                            Neustart der 48-Stunden-Frist.</p>
+                        <form id="renewal-form">
+                            <div class="settings-grid inner"><label>Automatisch erneuern<select id="renew-interval">
+                                        <option value="0">Aus · nur manuell</option>
+                                        <option value="300">Alle 5 Minuten · Test</option>
+                                        <option value="600">Alle 10 Minuten · Test</option>
+                                        <option value="1800">Alle 30 Minuten · Test</option>
+                                        <option value="43200">Alle 12 Stunden</option>
+                                        <option value="86400">Alle 24 Stunden</option>
+                                        <option value="129600">Alle 36 Stunden</option>
+                                        <option value="172800">Alle 48 Stunden · bei Twitch 2 Minuten vorher</option>
+                                    </select></label><label>Trennpause<select id="renew-gap">
+                                        <option value="2">2 Sekunden · kurze Neuverbindung</option>
+                                        <option value="5">5 Sekunden</option>
+                                        <option value="10">10 Sekunden</option>
+                                        <option value="30">30 Sekunden</option>
+                                        <option value="95">95 Sekunden · neue Sendung anstoßen</option>
+                                        <option value="120">120 Sekunden</option>
+                                    </select></label></div>
+                            <p class="small muted">Twitch-Disconnect-Schutz kann Trennungen bis zu 90 Sekunden
+                                überbrücken. Eine längere Trennung kann eine neue Sendung bewirken, unterbricht aber die
+                                Zuschauerausgabe. Das ist keine unterbrechungsfreie Umgehung des Twitch-Limits.</p>
+                            <button class="secondary" type="submit">Einstellungen speichern</button><button
+                                class="ghost" disabled="" id="renew-now" type="button">Jetzt neu verbinden</button>
+                        </form>
+                        <p class="small muted" id="renew-note" role="status"></p>
+                    </section>
+                </div>
+            </section>
+            {% if user.admin %}<section class="app-view" data-view="administration" aria-label="Administration" hidden>
+                <section class="panel wide-details" id="admin">
+                    <h2>Administration </h2>
+                    <div class="settings-grid inner">
+                        <section>
+                            <h3>Benutzer hinzufügen</h3>
+                            <form id="user-form"><label>Benutzername<input autocomplete="off" minlength="3"
+                                        name="username" required="" /></label>
+                                <p class="small muted">Benutzername: 3–30 Zeichen. Passwort: mindestens 12 Zeichen.</p>
+                                <label>Startpasswort<input autocomplete="new-password" minlength="12" name="password"
+                                        placeholder="Mindestens 12 Zeichen" required=""
+                                        type="password" /></label><button class="secondary" type="submit">Benutzer
+                                    anlegen</button>
+                            </form>
+                            <p class="small muted">Jeder Benutzer erhält automatisch zwei Quellen und ein Offline-Video.
+                            </p>
+                            <div id="user-list"></div>
+                        </section>
+                        <section>
+                            <h3>Twitch-App einrichten</h3>
+                            <p class="small muted">Einmal für alle Benutzer. Registriere eine „Confidential“-App in der
+                                Twitch Developer Console.</p><a href="https://dev.twitch.tv/console/apps" rel="noopener"
+                                target="_blank">Twitch Developer Console ↗</a><label>OAuth-Rückrufadresse<code
+                                    id="callback">Wird aus der öffentlichen Adresse geladen</code></label>
+                            <form id="oauth-form"><label>Client-ID<input autocomplete="off" id="client-id"
+                                        name="client_id" required="" /></label><label>Client-Secret<input
+                                        autocomplete="off" id="client-secret" name="client_secret"
+                                        placeholder="Nur beim ersten Mal erforderlich" type="password" /></label><button
+                                    class="secondary" type="submit">Twitch-App speichern</button></form>
+                        </section>
+                        <section class="google-app-settings">
+                            <h3>Google-App für YouTube</h3>
+                            <p class="small muted">In Google Cloud die YouTube Data API v3 aktivieren, den
+                                OAuth-Zustimmungsbildschirm einrichten und eine OAuth-Client-ID vom Typ „Webanwendung“
+                                anlegen. Im Testmodus alle gewünschten Google-Konten als Testnutzer hinzufügen. Für
+                                weitere Nutzer außerhalb des Testmodus kann Google eine App-Prüfung verlangen.</p><a
+                                href="https://console.cloud.google.com/apis/credentials" rel="noopener"
+                                target="_blank">Google Cloud Console ↗</a><label>Autorisierte Weiterleitungsadresse<code
+                                    id="google-callback">Wird aus der öffentlichen Adresse geladen</code></label>
+                            <form id="google-form"><label>Google Client-ID<input autocomplete="off"
+                                        id="google-client-id" name="client_id" placeholder="…apps.googleusercontent.com"
+                                        required="" /></label><label>Google Client-Secret<input autocomplete="off"
+                                        id="google-client-secret" name="client_secret"
+                                        placeholder="Nur beim ersten Mal erforderlich" type="password" /></label><button
+                                    class="secondary" type="submit">Google-App speichern</button></form>
+                            <p class="small muted">Nur für Kontofreigabe und Chat erforderlich. Streaming per
+                                YouTube-Streamschlüssel funktioniert unabhängig davon.</p>
+                        </section>
+                    </div>
+                </section>
+            </section>{% endif %}
+            <footer><span>MediaMTX - StreamDesk · Deine persönliche Regie</span><span>Aufnahmen &amp; Wiederholungen starten nur
+                    manuell.</span></footer>
+        </main>
+    </div>
+</body>
+
+</html>

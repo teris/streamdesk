@@ -1,0 +1,51 @@
+html,
+body {
+    margin: 0;
+    background: transparent;
+    font-family: system-ui;
+    color: white
+}
+
+.demo {
+    position: absolute;
+    top: 70px;
+    right: 70px;
+    width: 470px;
+    background: #221344dd;
+    border: 3px solid #bda4ff;
+    border-radius: 18px;
+    padding: 24px;
+    box-sizing: border-box;
+    overflow: hidden
+}
+
+.demo strong {
+    font-size: 25px;
+    display: block
+}
+
+.demo span {
+    font-size: 34px;
+    display: block;
+    margin-top: 12px;
+    font-variant-numeric: tabular-nums
+}
+
+.bar {
+    height: 7px;
+    background: #a78aff;
+    width: 100%;
+    margin-top: 20px;
+    transform-origin: left;
+    animation: progress 5s linear infinite
+}
+
+@keyframes progress {
+    from {
+        transform: scaleX(.02)
+    }
+
+    to {
+        transform: scaleX(1)
+    }
+}

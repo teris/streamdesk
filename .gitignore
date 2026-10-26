@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Playwright / browser runtime
+browsers/
+
+# Secrets and local runtime (never commit)
+.env
+.env.*
+!.env.example
+*.env
+*.db
+*.db-*
+*.sqlite*
+*.key
+*.pem
+*.crt
+fernet.key
+session.key
+initial-login.txt
+installation.json
+
+# Media and operator data
+media/
+recordings/
+uploads/
+backups/
+work/
+*.mp4
+*.ts
+*.m3u8
+
+# Logs and archives
+*.log
+*.tar.gz
+*.zip
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
