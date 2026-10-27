@@ -26,7 +26,7 @@
   function protocols() {
     const list = find('#protocol-status');list.replaceChildren();
     const rtc = document.createElement('p');
-    const active = advanced.webrtc && advanced.webrtc_runtime !== false;
+    const active = window.StreamDeskServices.allowed('webrtc') && advanced.webrtc && advanced.webrtc_runtime !== false;
     rtc.textContent = !advanced.webrtc ? 'WebRTC ist deaktiviert. Ein Administrator kann den Server im Formular darunter aktivieren.' : advanced.webrtc_runtime === false ? 'WebRTC ist konfiguriert, aber auf dem laufenden Server noch deaktiviert. Konfiguration erneut speichern und Status aktualisieren.' : `WebRTC ist aktiviert · UDP/ICE: ${advanced.webrtc_ice_address || 'nicht eingerichtet'}.`;
     list.append(rtc);
     const srt = document.createElement('p');
@@ -71,6 +71,15 @@
           find('#webrtc-enabled').checked = advanced.webrtc;
           find('#webrtc-hosts').value = advanced.webrtc_hosts.join(', ');
         }
+        if (find('#rtmp-encryption')) {
+          find('#rtmp-encryption').value = advanced.protocol_encryption.rtmp;
+          find('#rtsp-encryption').value = advanced.protocol_encryption.rtsp;
+          find('#bandwidth-limit').value = advanced.bandwidth_limit_mbps || 0;
+          find('#auth-method').value = advanced.auth.method;
+          find('#auth-address').value = advanced.auth.address;
+          find('#auth-claim').value = advanced.auth.claim_key;
+          find('#listener-moq').checked=advanced.listeners.moq;
+        }
       }
       find('#native-status').textContent = advanced.native.map(row => `${row.source}: ${row.enabled ? 'aktiv' : 'aus'}`).join(' · ') + (advanced.native_storage_ready ? ` · ${advanced.native_free_mb} MB frei` : ' · Aufnahmeverzeichnis fehlt: Installer im Update-Modus ausführen.');
       find('#viewer-disable').disabled = !advanced.viewer_url;
@@ -91,7 +100,7 @@
       const button = document.createElement('button');
       button.type = 'button';button.className = running ? 'danger' : 'secondary';
       button.textContent = platformName(output.kind) + (running ? ' stoppen' : ' starten');
-      button.disabled = !status.expert_mode || !status.ok || status.state === 'renewing';
+      button.disabled = output.allowed===false || !status.expert_mode || !status.ok || status.state === 'renewing';
       button.addEventListener('click',() => action(() => api(`/api/outputs/${output.kind}/${running ? 'stop' : 'start'}`,{}),'Streamingziel aktualisiert.',list));
       list.append(button);
     }
@@ -138,6 +147,32 @@
     if (!advanced) return;
     const hosts = new Set(find('#webrtc-hosts').value.split(',').map(host => host.trim()).filter(Boolean));
     hosts.add(advanced.webrtc_suggested_host);find('#webrtc-hosts').value = [...hosts].join(', ');
+  });
+  find('#protocol-encryption-form')?.addEventListener('submit',event => {
+    event.preventDefault();action(async () => {
+      await api('/api/admin/protocol-encryption',{rtmp:find('#rtmp-encryption').value,rtsp:find('#rtsp-encryption').value});
+      await loadAdvanced(true);
+    },'Verschlüsselte Listener gespeichert.',event.currentTarget);
+  });
+  find('#bandwidth-form')?.addEventListener('submit',event => {
+    event.preventDefault();action(async () => {
+      await api('/api/admin/bandwidth',{limit_mbps:Number(find('#bandwidth-limit').value)});
+      await loadAdvanced(true);
+    },'Bandbreitengrenzwert gespeichert.',event.currentTarget);
+  });
+  find('#auth-strategy-form')?.addEventListener('submit',event => {
+    event.preventDefault();
+    if(!confirm('Interne Authentifizierung für die gesamte MediaMTX-Instanz bestätigen?'))return;
+    action(async () => {
+      await api('/api/admin/auth-strategy',{method:find('#auth-method').value,address:find('#auth-address').value.trim(),claim_key:find('#auth-claim').value.trim()});
+      await loadAdvanced(true);
+    },'Authentifizierungsstrategie gespeichert.',event.currentTarget);
+  });
+  find('#listener-form')?.addEventListener('submit',event => {
+    event.preventDefault();action(async () => {
+      await api('/api/admin/listeners',{moq:find('#listener-moq').checked});
+      await loadAdvanced(true);
+    },'Spezialprotokolle gespeichert.',event.currentTarget);
   });
   find('#protocol-refresh').addEventListener('click',() => loadAdvanced(true));
   for (const link of document.querySelectorAll('[data-webrtc-link]')) link.addEventListener('click',event => {

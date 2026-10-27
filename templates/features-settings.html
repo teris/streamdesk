@@ -1,4 +1,5 @@
 <section class="panel preferences-panel">
     <h2>Darstellung</h2>
     <form id="theme-form"><label>Theme<select id="theme"><option value="system" {% if user.theme == 'system' %}selected{% endif %}>Systemeinstellung</option><option value="dark" {% if user.theme == 'dark' %}selected{% endif %}>Dunkel</option><option value="light" {% if user.theme == 'light' %}selected{% endif %}>Hell</option></select></label><button class="secondary" type="submit">Darstellung speichern</button></form>
+    <form id="language-form"><label data-i18n="language">Sprache</label><select id="language"><option value="de" {% if user.language == 'de' %}selected{% endif %}>Deutsch</option><option value="en" {% if user.language == 'en' %}selected{% endif %}>English</option></select></form>
 </section>

@@ -1,5 +1,7 @@
 # MediaMTX - StreamDesk
 
+**Aktuelle Version: 1.1.6**
+
 Eine selbst gehostete Mehrbenutzer-Oberfläche für OBS-/Handy-Streams, manuelle Aufnahmen, Offline-Videos, Multistreaming und gemeinsamen Twitch-/YouTube-Chat.
 
 **MediaMTX - StreamDesk benötigt [MediaMTX](https://github.com/bluenviron/mediamtx).** MediaMTX übernimmt den eigentlichen Medienverkehr. StreamDesk steuert persönliche Eingänge, automatische Quellenwahl und Ausgänge über dessen Control API. Dies ist ein eigenständiges Community-Projekt und kein offizieller Bestandteil von MediaMTX, Twitch oder YouTube.
@@ -15,6 +17,7 @@ Expertenmodus: zusätzliche Quellen und Konten
 ## Funktionen
 
 - Eigener Expertenmodus mit Untermenüs für technische MediaMTX-Einstellungen und zusätzlicher serverseitiger Prüfung; nach jeder neuen Anmeldung ausgeschaltet. Globale MediaMTX-Einstellungen benötigen zusätzlich Administratorrechte.
+- Zentrale Dienstfreigaben unter **Administration → Dienste & Freigaben**: Nur Administratoren können Funktionen für alle Benutzer sperren; Zugangsdaten, Einstellungen und Aufnahmen bleiben erhalten.
 - Quellen und Prioritäten pro Ausgang, einzelne Streamingziele starten/stoppen, WebRTC-Kamera/-Vorschau, native segmentierte Aufnahmen und widerrufbare öffentliche HLS-Zuschauer-Links im Expertenmodus.
 - Geschützte zeitversetzte Wiedergabe eigener nativer Aufnahmen, mit optionalem Playback-Server und Ausschnitten bis zu einer Stunde.
 - Helles, dunkles oder System-Theme pro Benutzer sowie mobile Bedienelemente, immer verfügbar.
@@ -29,6 +32,7 @@ Expertenmodus: zusätzliche Quellen und Konten
 - Optionale Erneuerung der Twitch-Verbindung, während andere Streamingziele verbunden bleiben.
 - Twitch-Titel und Kategorie bearbeiten; YouTube-Konto und eigene Sendung auswählen.
 - Sichtbarer Bereich „Mein Konto“ für den eigenen Passwortwechsel; Administration mit Löschung deaktivierter Konten und separatem Medienarchiv.
+- Getrennte Einstellungen für Twitch, YouTube und eigenen Anbieter; Discord-Bot-Einrichtung mit Anleitung im Expertenmodus.
 - Gemeinsamer Chat mit gezieltem Senden an Twitch, YouTube oder beide; persönliches, erneuerbares Widget für Browser-Docks und Browserquellen.
 
 ## Screenshots
@@ -117,7 +121,12 @@ Es gibt kein öffentliches Standardpasswort. Das Administratorkonto wird mit ein
 - [OBS und SRT-Verbindungsprobleme](docs/SRT.md)
 - [Reverse Proxy und NPMplus](docs/PROXY.md)
 - [Twitch- und Google-/YouTube-Kontofreigabe](docs/OAUTH.md)
+- [Discord-Bot erstellen und im Expertenmodus verbinden](docs/DISCORD.md)
+- [Dienste als Administrator global sperren und freigeben](docs/ADMIN_SERVICES.md)
 - [Konfigurationsvariablen](docs/CONFIGURATION.md)
+- [Authentifizierung und Spezialprotokolle](docs/AUTH_PROTOCOLS.md)
+- [Automation, Zeitplan und Export](docs/AUTOMATION.md)
+- [MediaMTX-Kompatibilitätsmatrix](docs/MEDIAMTX_COMPATIBILITY.md)
 - [Betrieb, Updates, Sicherung und Wiederherstellung](docs/OPERATIONS.md)
 - [Neu aufsetzen nach gelöschter Datenbank](INSTALL.md#datenbank-gelöscht-neue-instanz-an-bestehendem-mediamtx)
 - [Mitwirken und Tests](CONTRIBUTING.md)
@@ -142,10 +151,11 @@ Jeder Benutzer besitzt eigene Eingänge, Videos, Aufnahmen, Verbindungen und Cha
 - Eine neue Twitch-Sitzung ist nicht garantiert unterbrechungsfrei. Eine kurze Neuverbindung setzt die Twitch-Grenze von 48 Stunden nicht zuverlässig zurück. Disconnect-Schutz und eine neue Sendung sind unterschiedliche Dinge.
 - API-Kontofreigaben bei Twitch/Google sind für Chat erforderlich. YouTube-Streaming per Schlüssel benötigt keine Google-App. Eine YouTube-Sendung mit deaktiviertem oder beendetem Chat liefert keinen aktiven Chat.
 - Die Anwendung erstellt, veröffentlicht oder beendet keine YouTube-Sendung automatisch über die API. Die Autostart-Einstellungen im YouTube Studio gelten weiterhin.
-- Manuelle MP4-Aufnahmen werden bei Quellabbruch abgeschlossen und nicht automatisch neu gestartet. Bei weniger als 350 MiB freiem Speicher werden sie beendet; zum Start müssen mindestens 500 MiB frei sein. Ausdrücklich aktivierte native MediaMTX-Aufnahmen zeichnen wieder auf, sobald die Quelle verfügbar ist.
+- Direkte MP4-Aufnahmen einer einzelnen Quelle werden bei deren Abbruch abgeschlossen. Programmaufnahmen laufen über Quellenwechsel und Offline-Fallback weiter. Bei weniger als 350 MiB freiem Speicher werden Aufnahmen beendet; zum Start müssen mindestens 500 MiB frei sein. Ausdrücklich aktivierte native MediaMTX-Aufnahmen zeichnen wieder auf, sobald die Quelle verfügbar ist.
 - Browser-Overlays benötigen während ihrer Nutzung Chromium und zusätzliche CPU/RAM. Eine gemeinsame Videoausgabe wird auf die Ziele verteilt; die Upload-Bandbreite steigt mit deren Anzahl.
 - WebRTC benötigt kompatible Browser-/Quellcodecs und einen erreichbaren Medienport. Browser-Kamera-Publish setzt HTTPS voraus. Der Signalisierungsproxy öffnet keine Firewallports automatisch; Einrichtung siehe [Expertenmodus](docs/EXPERT_MODE.md).
-- Der Installer bindet eine **lokale native MediaMTX-Instanz** ein. Eine entfernte Instanz ohne Zugriff auf deren Konfiguration, Docker-exklusive Installationen sowie HTTP-/JWT-Authentifizierung werden in dieser Version nicht automatisch umgebaut.
+- Für native Installationen bleibt eine lokale MediaMTX-Instanz der Standard. Eine entfernte Instanz kann mit `--remote-mediamtx`, HTTPS-Control-API, lokaler Konfigurationsspiegelung und festen `--mediamtx-client-ip`-Adressen angebunden werden; StreamDesk beschreibt keine entfernte Datei direkt.
+- Für Labor- und Cloud-Setups liegt [compose.yml](compose.yml) mit getrennten Diensten, persistenten Volumes und Healthchecks bei.
 
 ## Lizenz und Abhängigkeiten
 
@@ -154,3 +164,5 @@ StreamDesk wird unter der [MIT-Lizenz](LICENSE) bereitgestellt. MediaMTX bleibt 
 Im Release-ZIP sind ausschließlich Quellcode und Dokumentation enthalten: keine Serverdatenbank, Konten, Kennwörter, Streamschlüssel, OAuth-Secrets, privaten Widget-Links oder hochgeladenen Videos.
 
 Die verbindliche Erweiterungsplanung steht in [ROADMAP.md](ROADMAP.md), unabhängig von der Feature-Liste. Die Wellen nach 1.1.0 sind weiterhin Planung.
+
+Die technische Prüfung vor dem Versionswechsel zu 1.1.5 und ihre Prüfgrenzen stehen im [Review vom 27. Oktober 2026](docs/REVIEW_2026-10-27.md). Die anschließenden Oberflächenänderungen sind im [Release-Prüfbericht](TESTING.md) beschrieben. HTTP-/JWT-Umschaltung bleibt gesperrt; Docker-/Remote-Betrieb ist ergänzend zur geprüften lokalen Installation vorgesehen.

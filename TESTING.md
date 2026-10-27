@@ -1,4 +1,30 @@
-# Prüfbericht: StreamDesk 1.1.0-rc.6
+# Prüfbericht: StreamDesk 1.1.6
+
+Die Unit-Tests sind für Linux ausgelegt; insbesondere verwenden Anwendung und Installer das POSIX-Modul `pwd`. Reine Windows-Python-Läufe sind daher kein unterstützter Testpfad.
+
+Die Unit-Tests und die reinen Einstellungs-/Dienst-Browsertests fixieren ausschließlich die Signierzeit ihrer Testsitzungen, damit rückwärts korrigierte Uhren auf dem Testhost keine zufälligen Abmeldungen auslösen. Die Sitzungsprüfung der Anwendung bleibt unverändert.
+
+## Zentrale Dienstfreigaben in 1.1.6
+
+152 Unit-Tests bestehen. 13 zusätzliche Unit-Tests gegenüber 1.1.5 prüfen Administratorrechte ohne Expertenmodus, CSRF, strikte Eingaben, Persistenz, gesperrte APIs, erhaltene Zugangsdaten und Auswahl, unberührte fremde MediaMTX-Pfade auch beim Legacy-Präfix, verschachtelte native Aufnahme-/Routingpausen, angehaltene Hintergrundaufträge, wiederverwendbare Zuschauerlinks und erneuten Abgleich nach einem MediaMTX-Ausfall. Eine WebRTC-Sperre darf die Programm-Engine nicht durch verbliebene Vorschau-Leser unterbrechen.
+
+`tests/services_smoke.py` verwendet zwei getrennte Chromium-Sitzungen für Administrator und normalen Benutzer. Geprüft werden globales Sperren und Freigeben ohne Neuanmeldung, ausblendbare Dienstgruppen, gesperrte Direktaufrufe, unveränderte Zugangsdaten, unabhängige Automation-/Benachrichtigungsfreigaben und mobile Ansichten. Die Discord-Antworten sind lokale Testdaten.
+
+Der erweiterte echte MediaMTX-Test prüft zusätzlich den Stopp nur des gesperrten Plattformausgangs bei weiterlaufendem anderem Ausgang, erhaltene Streamschlüssel, ausdrücklichen Neustart nach Freigabe, native Aufnahmepause mit Wiederaufnahme sowie die weiterlaufende HLS-Programmvorschau bei gesperrtem WebRTC.
+
+## Einstellungen und Discord in 1.1.5
+
+Zum Stand 1.1.5 bestanden 139 Unit-Tests. Geprüft werden die getrennten Einstellungen für Streaming-Auswahl, Twitch, YouTube, eigenen Anbieter und Darstellung, die serverseitige Expertensperre für Discord-Einrichtung einschließlich CSRF und Mandantengrenzen sowie die gemeinsame Versionsquelle für API, Oberfläche und Browser-Cache.
+
+`tests/settings_smoke.py` prüft im echten Chromium das unabhängige Speichern und Entfernen der drei Standardziele, Auswahl für den nächsten Stream, getrennte Untermenüs, den fünfstufigen Discord-Leitfaden, ungültige Kanal-IDs, das Leeren des Tokens nach dem Speichern und die weiterhin verfügbare Chatnutzung bei ausgeschaltetem Expertenmodus. Alle neuen Seiten werden bei 390 Pixeln in hellem und dunklem Theme auf Seitenüberlauf geprüft. Discord-Antworten sind lokale Testdaten; es wird kein externer Bot verbunden.
+
+Die bisherigen Medien- und Konto-Browsertests prüfen weiterhin die Programm-/WebRTC-Vorschau, Zielsteuerung, Aufnahme, Themes sowie Passkeys, Szenen und den Erhalt ungespeicherter Formulare. Die nachfolgenden Abschnitte dokumentieren die technische Grundlage und frühere Versionen.
+
+## Prüfung des erweiterten Arbeitsstands am 27. Oktober 2026
+
+136 Unit-Tests bestehen. Zusätzlich wurden Programm-/Routing-/Protokoll-Smokes, fMP4-/MPEG-TS-Playback einschließlich persistenter Clips, SRT, ein echter Bedarfs-Pull, lokale Aufnahme-ACLs sowie Browser-Passkeys/Szenen/Formularerhalt geprüft. Neue Prüfskripte: `account_smoke.py`, `permissions_smoke.py`, `on_demand_smoke.py`. Details, konkrete Versionen und Einschränkungen stehen im [Reviewbericht](docs/REVIEW_2026-10-27.md).
+
+Die folgenden Abschnitte dokumentieren die frühere rc.6-/1.1.0-Basis. Die dort genannte Zahl von 80 Unit-Tests ist historisch; der aktuelle Arbeitsstand enthält zusätzlich die inzwischen ergänzten Funktionen und Regressionen.
 
 ## Feste Standards, Routing je Ausgang und Kontooberfläche
 

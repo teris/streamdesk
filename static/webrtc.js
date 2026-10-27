@@ -2,7 +2,7 @@
 (() => {
   const video = document.querySelector('#rtc-video'), message = document.querySelector('#rtc-status');
   const start = document.querySelector('#rtc-start'), stop = document.querySelector('#rtc-stop');
-  const mode = document.body.dataset.mode, slot = document.body.dataset.slot, program = document.body.dataset.program || 'main';
+  const mode = document.body.dataset.mode, slot = document.body.dataset.slot, source = document.body.dataset.source, program = document.body.dataset.program || 'main';
   const csrf = document.querySelector('meta[name="csrf-token"]').content;
   let pc, media, resource, generation = 0;
   async function cleanup() {
@@ -67,7 +67,8 @@
         peer.addEventListener('icegatheringstatechange',changed);changed();
       });
       if (current !== generation) return;
-      const response = await checked(await fetch(`/api/webrtc/${slot}/${mode}?program=${encodeURIComponent(program)}`,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/sdp','X-CSRF-Token':csrf},body:peer.localDescription.sdp}));
+      const endpoint=source?`/api/webrtc/source/${encodeURIComponent(source)}/${mode}`:`/api/webrtc/${slot}/${mode}?program=${encodeURIComponent(program)}`;
+      const response = await checked(await fetch(endpoint,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/sdp','X-CSRF-Token':csrf},body:peer.localDescription.sdp}));
       const location = response.headers.get('Location');
       if (current !== generation) { if (location) fetch(location,{method:'DELETE',headers:{'X-CSRF-Token':csrf},keepalive:true});return; }
       resource = location;

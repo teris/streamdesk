@@ -14,6 +14,8 @@ Die aktive Datei ist standardmäßig `/etc/streamdesk.env`; bei einem eigenen Di
 | `STREAMDESK_NAMESPACE` | Reservierter MediaMTX-Präfix, Standard `streamdesk`. Nach Einrichtung nicht ohne Datenmigration ändern. |
 | `MEDIAMTX_CONFIG` | Lokal schreibbare MediaMTX-Konfiguration. |
 | `MEDIAMTX_API` | Lokaler API-Endpunkt inklusive `/v3/`. |
+| `MEDIAMTX_API_CA` | Optionale lokale CA-Datei zur Zertifikatsprüfung einer verschlüsselten Control API. |
+| `MEDIAMTX_METRICS` | Lokaler Prometheus-Endpunkt; Werte werden vor Ausgabe auf den angemeldeten Tenant-Präfix begrenzt. |
 | `MEDIAMTX_RTSP` | Lokaler RTSP-Endpunkt inklusive abschließendem `/`. |
 | `MEDIAMTX_HLS` | Lokaler HLS-Endpunkt inklusive abschließendem `/`. |
 | `MEDIAMTX_WEBRTC` | Optionaler lokaler WHIP-/WHEP-Endpunkt inklusive abschließendem `/`. Ohne Angabe aus `webrtcAddress` und `webrtcEncryption` der lokalen Konfiguration abgeleitet. |
@@ -32,7 +34,13 @@ Die aktive Datei ist standardmäßig `/etc/streamdesk.env`; bei einem eigenen Di
 
 Der Installer leitet lokale Endpunkte aus der vorhandenen MediaMTX-Konfiguration ab. Nach manueller Änderung eines Medienports auch die betreffenden Env-Werte anpassen. API-/HLS-TLS-Zertifikate werden regulär geprüft.
 
-Der UI-Dienst arbeitet derzeit als root, weil er lokale Medienpfade, Benutzerdateien und die MediaMTX-Konfiguration verwaltet. Browser-Overlays laufen unter einem separaten Systemkonto mit temporärem Arbeitsverzeichnis. Die systemd-Unit begrenzt schreibbare Bereiche. Eine Trennung der gesamten Verwaltungsanwendung auf einen weniger privilegierten Dienstbenutzer ist ein möglicher zukünftiger Ausbau.
+Der UI-Dienst arbeitet als festes Systemkonto `streamdesk`. Ein vom Installer bereitgestelltes MediaMTX verwendet `streamdesk-media`; bei Attach wird dessen vorhandene feste Identität übernommen. Ein dediziertes Konfigurationsverzeichnis erhält eine ACL für atomare UI-Schreibvorgänge. Für native Aufnahmen werden Setgid-Verzeichnisse und vererbte Benutzer-ACLs eingerichtet; dadurch bleiben Aufnahmen auch bei `UMask=0077` lesbar. Der private Datenordner bleibt davon getrennt. Browser-Overlays laufen bei nativer Installation unter `streamdesk-browser`; die UI besitzt nur `CAP_SETUID`/`CAP_SETGID` zum Starten und Beenden dieser Renderer unter deren Identität. Im Docker-Paket laufen UI und Renderer im selben Containerkonto.
+
+Neue Betriebseinstellungen: `MEDIAMTX_API_CA` enthält eine optionale CA-Datei für die Control API; `MEDIAMTX_METRICS` die interne Metrics-URL; `STREAMDESK_HOOK_ALLOWLIST` ein JSON-Objekt erlaubter Befehle. `STREAMDESK_MEDIAMTX_MODE=remote-api` kennzeichnet entfernte Instanzen. Native Dateifunktionen dort benötigen identisch eingebundenen Speicher und die ausdrückliche Freigabe `STREAMDESK_NATIVE_SHARED=1`. Konfiguration siehe [Installation](../INSTALL.md).
+
+Die Control API kann beim Installieren oder Update ausdrücklich mit `--enable-api-tls --api-cert … --api-key …` verschlüsselt werden. Für eine private CA wird zusätzlich `--api-ca …` angegeben. StreamDesk prüft das Serverzertifikat bei Healthchecks und allen späteren API-Aufrufen; eine Deaktivierung der Prüfung ist nicht vorgesehen.
+
+RTMPS und RTSPS werden mit `--enable-ingest-tls --ingest-cert … --ingest-key …` eingerichtet. Danach kann ein Administrator unter **Expertenmodus → Protokolle & WebRTC** zwischen unverschlüsselt, optional und erforderlich wählen. Der dortige Upload-Grenzwert steuert die Warnung ab 85 Prozent gemessener Ausgangsbandbreite; `0` deaktiviert sie.
 
 ## Erweiterungen ab 1.1.0-rc.4
 

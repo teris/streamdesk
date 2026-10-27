@@ -1,0 +1,73 @@
+<nav id="settings-subnav" class="settings-subnav" aria-label="Einstellungen-Untermenü" hidden>
+    <a href="#settings">Streaming-Auswahl</a>
+    <a href="#settings-twitch">Twitch</a>
+    <a href="#settings-youtube">YouTube</a>
+    <a href="#settings-custom">Eigener Anbieter</a>
+    <a href="#settings-appearance">Darstellung &amp; Sprache</a>
+</nav>
+<section class="app-view" data-view="settings" aria-label="Streaming-Auswahl" hidden>
+    <section class="panel settings-selection">
+        <div class="section-heading"><h2>Beim nächsten Stream senden an</h2><span class="tag" id="output-kind">Streamingziele</span></div>
+        <p class="small muted">Wähle deine Ziele für den nächsten Start. Deine gespeicherten Konten und Schlüssel bleiben erhalten.</p>
+        <form id="targets-form">
+            <div class="target-presets"><button type="button" class="secondary" data-target-preset="twitch">Nur Twitch</button><button type="button" class="secondary" data-target-preset="youtube">Nur YouTube</button><button type="button" class="secondary" data-target-preset="twitch,youtube">Twitch + YouTube</button><button type="button" class="ghost" data-target-preset="">Kein Ziel</button></div>
+            <div id="target-list" class="target-list"></div>
+            <button class="primary" type="submit" id="save-targets">Streaming-Auswahl speichern</button>
+            <p id="target-summary" class="small" role="status"></p>
+            <p class="small muted">Ein laufender Stream wird durch diese Auswahl nicht verändert.</p>
+        </form>
+    </section>
+    <div class="settings-cards" aria-label="Plattform einzeln einrichten">
+        <a href="#settings-twitch" class="settings-card"><strong>Twitch</strong><span data-platform-state="twitch">Wird geprüft …</span><small>Konto und Streamschlüssel verwalten →</small></a>
+        <a href="#settings-youtube" class="settings-card"><strong>YouTube</strong><span data-platform-state="youtube">Wird geprüft …</span><small>Konto, Sendung und Streamschlüssel verwalten →</small></a>
+        <a href="#settings-custom" class="settings-card"><strong>Eigener Anbieter</strong><span data-platform-state="custom">Wird geprüft …</span><small>Eigene Zieladresse verwalten →</small></a>
+    </div>
+    <div class="settings-shortcuts"><a href="#settings-appearance">Darstellung &amp; Sprache</a><a href="#expert-discord">Discord-Bot im Expertenmodus einrichten →</a><a href="#expert-outputs">Weitere Ausgänge im Expertenmodus →</a></div>
+    <details class="panel settings-reset"><summary>Alle Streamschlüssel entfernen</summary><p class="small muted">Beendet die Ausgänge und entfernt deren Streamschlüssel. Die Kontofreigaben für Twitch und YouTube bleiben bestehen.</p><button class="danger" id="disconnect" type="button">Alle Streamschlüssel entfernen</button></details>
+</section>
+<section class="app-view" data-view="settings-twitch" aria-label="Twitch-Einstellungen" hidden>
+    <div class="provider-settings">
+        <section class="panel provider-account"><div class="section-heading"><h2>Twitch-Konto</h2><span class="tag">Chat &amp; Kanalinformationen</span></div>
+            <p class="small muted" id="account">Kontoverbindung wird geprüft …</p>
+            <a class="twitch-button" href="/oauth/twitch" id="oauth">Mit Twitch verbinden ↗</a>
+            <p class="small muted" id="oauth-note">Kontoverbindung wird geprüft.</p>
+            <button type="button" class="ghost" id="twitch-disconnect">Twitch-Konto trennen</button>
+        </section>
+        <section class="panel provider-credentials"><div class="section-heading"><h2>Twitch-Streamschlüssel</h2><span class="badge" data-platform-state="twitch">Wird geprüft …</span></div>
+            <p class="small muted">Den Streamschlüssel findest du im Twitch Creator Dashboard unter Einstellungen → Stream.</p>
+            <form id="twitch-output-form" autocomplete="off"><input type="hidden" name="kind" value="twitch"><label>Neuer Twitch-Streamschlüssel<input name="key" type="password" autocomplete="new-password" minlength="15" maxlength="256" placeholder="live_…" required></label><button class="secondary" type="submit">Twitch-Schlüssel speichern</button></form>
+            <button class="ghost" type="button" data-remove-output="twitch">Twitch-Schlüssel entfernen</button>
+        </section>
+    </div>
+    <p class="small muted">Wähle Twitch anschließend unter <a href="#settings">Streaming-Auswahl</a> für den nächsten Start aus.</p>
+</section>
+<section class="app-view" data-view="settings-youtube" aria-label="YouTube-Einstellungen" hidden>
+    <div class="provider-settings">
+        <section class="panel provider-account"><div class="section-heading"><h2>YouTube-Konto</h2><span class="tag">Chat &amp; Sendungen</span></div>
+            <p class="small muted" id="youtube-account">Kontoverbindung wird geprüft …</p>
+            <a class="youtube-button" href="/oauth/youtube" id="youtube-oauth">YouTube-Konto verbinden ↗</a>
+            <button type="button" class="ghost" id="youtube-disconnect">YouTube-Konto trennen</button>
+            <details class="provider-broadcasts"><summary>Eigene YouTube-Sendung auswählen</summary>
+                <div class="youtube-broadcast-controls"><button type="button" class="secondary" id="yt-load">YouTube-Sendungen laden</button><label>Eigene YouTube-Sendung<select id="yt-broadcasts"><option value="">Bitte Sendungen laden</option></select></label>
+                    <div class="video-actions"><button type="button" class="secondary" id="yt-select-chat">Für Chat auswählen</button><button type="button" class="secondary" id="yt-use-output">Streamschlüssel übernehmen</button></div>
+                    <p class="small muted" id="yt-note">Sendungen im YouTube Studio anlegen. Es wird keine Sendung automatisch veröffentlicht.</p>
+                </div>
+            </details>
+        </section>
+        <section class="panel provider-credentials"><div class="section-heading"><h2>YouTube-Streamschlüssel</h2><span class="badge" data-platform-state="youtube">Wird geprüft …</span></div>
+            <p class="small muted">Den Schlüssel findest du im YouTube Studio bei deiner Live-Sendung. Du kannst ihn auch direkt eingeben, ohne ein Google-Konto zu verbinden.</p>
+            <form id="youtube-output-form" autocomplete="off"><input type="hidden" name="kind" value="youtube"><label>Neuer YouTube-Streamschlüssel<input name="key" type="password" autocomplete="new-password" minlength="10" maxlength="256" placeholder="xxxx-xxxx-xxxx-xxxx" required></label><button class="secondary" type="submit">YouTube-Schlüssel speichern</button></form>
+            <button class="ghost" type="button" data-remove-output="youtube">YouTube-Schlüssel entfernen</button>
+        </section>
+    </div>
+    <p class="small muted">Wähle YouTube anschließend unter <a href="#settings">Streaming-Auswahl</a> für den nächsten Start aus.</p>
+</section>
+<section class="app-view" data-view="settings-custom" aria-label="Eigener Anbieter" hidden>
+    <section class="panel provider-custom"><div class="section-heading"><h2>Eigener Anbieter</h2><span class="badge" data-platform-state="custom">Wird geprüft …</span></div>
+        <p class="small muted">Hier richtest du den festen eigenen Ausgang ein. Zusätzliche Anbieter legst du unter <a href="#expert-outputs">Expertenmodus → Ausgänge &amp; Konten</a> an.</p>
+        <form id="output-form" autocomplete="off"><input type="hidden" name="kind" value="custom"><label>Zieladresse<input id="custom-output-url" name="url" type="password" autocomplete="new-password" maxlength="2048" placeholder="rtmps://server/app#streamkey" required></label><p class="small muted">Unterstützt RTMP, RTMPS, SRT, RTSP und RTSPS. Bei RTMP den Streamschlüssel mit # an die Serveradresse anhängen.</p><button class="secondary" type="submit">Anbieter speichern</button></form>
+        <button class="ghost" type="button" data-remove-output="custom">Anbieter-Schlüssel entfernen</button>
+    </section>
+    <p class="small muted">Wähle den Anbieter anschließend unter <a href="#settings">Streaming-Auswahl</a> für den nächsten Start aus.</p>
+</section>
+<section class="app-view" data-view="settings-appearance" aria-label="Darstellung und Sprache" hidden>{% include 'features-settings.html' %}</section>

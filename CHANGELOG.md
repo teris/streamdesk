@@ -1,5 +1,50 @@
 # Änderungen
 
+## 1.1.6
+
+- Administration mit gruppierten Dienstfreigaben für alle Benutzer: Plattformen, Discord, WebRTC, neue Aufnahmen, Playback, Zuschauerlinks, zusätzliche Quellen/Routing, Browser-Overlays, Automation und Benachrichtigungen. Nur Administratoren ändern die Freigaben; Expertenmodus und direkte API-Aufrufe umgehen keine Sperren. Konfigurationen und Archive bleiben erhalten.
+- Aktive betroffene Ausgänge/WebRTC-Verbindungen werden beendet, manuelle Aufnahmen sauber abgeschlossen und native Aufnahmeabsichten über verschachtelte Dienstsperren erhalten. Hintergrundaufträge pausieren; während der Sperre verpasste Starts müssen neu geplant werden. Fremde MediaMTX-Pfade bleiben unverändert.
+- Inhaltsfingerabdruck für statische Dateien ergänzt; Änderungen erhalten auch innerhalb eines Entwicklungsstands frische Browser-Cache-Adressen.
+
+## 1.1.5
+
+- Einstellungen in eigene Untermenüs für Streaming-Auswahl, Twitch, YouTube, eigenen Anbieter und Darstellung/Sprache getrennt. Pro Plattform bleiben Kontofreigabe und Streamschlüssel zusammen; Schlüssel werden im jeweiligen Bereich verwaltet.
+- Eigener Expertenbereich „Discord-Bot“ mit Anleitung für App, Token, Message Content Intent, Servereinladung und Kanal-ID. Einrichtung und Trennung sind auch serverseitig an den Expertenmodus gebunden; vorhandene Chats bleiben normal nutzbar.
+- Version in Oberfläche und Status-API sichtbar. Statische Dateien übernehmen ihre Cache-Version aus VERSION.
+
+
+### Prüfung und Korrekturen
+
+- Quellensteuerung von zeitaufwendigen Zeitplan-/Exportarbeiten getrennt; atomare Auftragsübernahme, gestreamte Dateiübertragung und Wartezeiten nach Exportfehlern.
+- Szenen im Expertenbereich mit serverseitiger Sperre und Aufnahme-Schutz auch bei gleichzeitigem Umrouten mehrerer Ziele. Automation-Untermenü erreichbar; ungespeicherte Formulare bleiben beim Polling erhalten.
+- Vollständige Passkey-Prüfung mit `py_webauthn`, verifizierten Benutzern, serverseitigen Einmal-Challenges und Anmeldelimit für Passkeys/Recovery. Konto- und Clip-Löschung behandeln neue Daten vollständig; erfolgreiche HTTP-204-Antworten werden in der Oberfläche korrekt erkannt.
+- YouTube-gRPC-Nachrichtenverarbeitung nach Discord-Erweiterung wiederhergestellt; Discord-Cursor berücksichtigt auch übersprungene Bot-Nachrichten.
+- Feste Dienstkonten erhalten begrenzte Konfigurations-/Aufnahme-ACLs; Gruppenrechte bleiben bei atomaren Schreibvorgängen erhalten. Browser-Renderer werden ohne root oder zusätzliche Kill-/Dateirechte gesteuert; Live-Overlays behalten Format und Quellenstatus.
+- On-demand-Pull für Programmverbraucher aktiviert und im Leerlauf beendet. Inaktive statische Quellen werden als offline erkannt. Standby-Dateien liegen im gemeinsamen nativen Speicher; UDP-Portkonflikte und unvollständige Protokollwechsel werden abgefangen.
+- Remote-Updates behalten Betriebsart und Endpunkte. Native Dateifunktionen benötigen dort explizit gemeinsamen Speicher. Container-Bootstrap erzeugt gültiges JSON auch für Sonderzeichen, private Daten bleiben außerhalb des Build-Kontexts; Readiness prüft den Quellenmanager.
+- Unvollständiger HTTP-/JWT-Wechsel gesperrt. Striktes RTSPS ohne vorbereiteten internen TLS-Endpunkt wird abgewiesen; RTMPS-Verbindungsdaten verwenden den tatsächlichen Listener. Webhook-/Export-/SMTP-Verbindungen prüfen und binden öffentliche Zieladressen und folgen keinen HTTP-Weiterleitungen.
+
+### Weitere Änderungen seit rc.6
+
+- MediaMTX-Kompatibilitätsprofil, Versionsprobe und explizite Installer-Ziel-Major-Auswahl verhindern unbekannte Major-/Schema-Wechsel; die 2.x-Freigabe benötigt ein geprüftes StreamDesk-Profil.
+- Persistente, eigentümergeschützte Clips sowie deduplizierte Webhook-/E-Mail-Benachrichtigungen für Offline-, Forward- und Speicherereignisse.
+- BUILD D ergänzt gespeicherte Szenen aus Quellenprogramm, Overlay-Video und Zielen sowie Browser-Overlays auf Live-Programmen.
+- Rollen und serverseitige Policies unterstützen einem Chat-Konto zugewiesene Moderatoren; Administratoren verwalten Rollen.
+- WebAuthn-Passkeys mit Einmal-Recovery-Codes, verschlüsselter Discord-Chat-Adapter, EN/DE-Benutzerpräferenz und geplanter Twitch-Titel/Start.
+- Installer richtet StreamDesk und das mitgelieferte MediaMTX mit festen unprivilegierten Systemkonten, gemeinsamen Minimalrechten und gehärteten systemd-Units ein.
+- Die Control API kann ausdrücklich mit Zertifikat, Schlüssel und optionaler eigener CA auf HTTPS umgestellt werden; Zertifikatsfehler brechen Installation oder Update mit Rollback ab.
+- Optionale RTMPS-/RTSPS-Listener mit verwaltetem Zertifikat, tenantisolierte Prometheus-Leser-/Fehlerwerte und eine konfigurierbare Warnung bei 85 Prozent der verfügbaren Upload-Bandbreite.
+- Gemeinsamer MediaMTX-Client für lokale und entfernte Control APIs, expliziter Remote-Modus ohne entfernte Dateioperationen sowie Docker-/Compose-Paketierung mit persistenten Volumes und Healthchecks.
+- Interne Authentifizierung mit Vorbereitung einer späteren externen Strategie; HTTP-/JWT-Wechsel bleiben bis zur vollständigen Anbindung gesperrt. Quellenwahl für WebRTC, MoQ, abgesichertes UDP-MPEG-TS/RTP und SRT-Leseadressen.
+- Konfigurierbare Fallback-/Retry-Zeiten, Source-on-demand, `alwaysAvailableFile`, öffentliche Pfad-Proxys und Kick-/Facebook-/Trovo-Ausgangsvorlagen.
+- Persistente Aufnahme-/Ausgangszeitpläne, strikt allowlist-basierte Publish-/Ready-Hooks und idempotenter HTTPS-PUT-Export für WebDAV-/Upload-Zielbasen. Beliebige vorsignierte S3-URLs sind nicht unterstützt.
+
+## 1.1.0
+
+- Stabiler Stand der in 1.1.0-rc.1 bis 1.1.0-rc.6 gelieferten Medien-, Routing-, Playback-, Konto- und Wiederherstellungsfunktionen.
+- Die dokumentierte rc.6-Routingmatrix, privaten Vorschau- und Playback-Grenzen sowie Attach-/Recovery-Schutzregeln wurden als Release-Basis übernommen.
+- Feature-, Installations- und Testdokumentation auf den stabilen 1.1.0-Stand synchronisiert.
+
 ## 1.1.0-rc.6
 
 - Standard wieder exakt Source 1 und Source 2 sowie Twitch, YouTube und ein eigener Anbieter. Source 1/2 lassen sich weder umbenennen, umkonfigurieren, löschen noch unter die Prioritäten zusätzlicher Quellen verschieben.

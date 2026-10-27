@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 import json
 import math
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -10,7 +11,7 @@ import threading
 import urllib.parse
 import urllib.request
 
-from flask import Response, jsonify, request
+from flask import Response, jsonify, request, send_file
 
 
 class PlaybackFeatures:
@@ -18,6 +19,11 @@ class PlaybackFeatures:
         self.c, self.media = core, media
         self.probes = {}
         self.remux_slots = threading.BoundedSemaphore(2)
+        self.active_clips = {}
+        with core.db() as connection:
+            connection.execute('''CREATE TABLE IF NOT EXISTS clips(
+              id INTEGER PRIMARY KEY,user_id INTEGER NOT NULL,name TEXT NOT NULL,path TEXT NOT NULL UNIQUE,
+              source TEXT NOT NULL,start TEXT NOT NULL,duration REAL NOT NULL,size INTEGER NOT NULL,created REAL NOT NULL)''')
         self.install_routes()
 
     def base(self):
@@ -173,9 +179,102 @@ class PlaybackFeatures:
         response.call_on_close(cleanup)
         return response
 
+    def create_clip(self, user, source, start, duration, destination):
+        name = self.source(user, source)
+        if self.media.config()['paths'].get(name, {}).get('recordFormat', 'fmp4') == 'mpegts':
+            segments = self.ts_segments(user, source)
+            chosen = [(at,length,path) for at,length,path in segments if at+length>start.timestamp() and at<start.timestamp()+duration]
+            if not chosen:
+                raise self.c.Error('Für diesen Zeitraum ist kein Segment vorhanden.',http_status=404)
+            with tempfile.NamedTemporaryFile(mode='w',suffix='.ffconcat',delete=False) as manifest:
+                manifest_path=Path(manifest.name)
+                for _,_,path in chosen:
+                    manifest.write("file '"+str(path).replace("'","'\\''")+"'\n")
+            try:
+                subprocess.run(['ffmpeg','-hide_banner','-loglevel','error','-nostdin','-f','concat','-safe','0',
+                    '-i',str(manifest_path),'-ss',str(max(0,start.timestamp()-chosen[0][0])),'-t',str(duration),
+                    '-map','0:v:0?','-map','0:a:0?','-c','copy','-movflags','+faststart',str(destination)],
+                    timeout=180,check=True)
+            except (OSError,subprocess.SubprocessError):
+                destination.unlink(missing_ok=True)
+                raise self.c.Error('Clip konnte nicht erstellt werden.') from None
+            finally:
+                manifest_path.unlink(missing_ok=True)
+            return
+        query=urllib.parse.urlencode({'path':name,'start':start.isoformat(),'duration':duration,'format':'mp4'})
+        try:
+            with urllib.request.urlopen(urllib.request.Request(self.base()+'get?'+query,headers=self.media.media_headers(user)),timeout=30) as response, destination.open('wb') as target:
+                total=0
+                while chunk:=response.read(256*1024):
+                    total+=len(chunk)
+                    if total>512*1024*1024:raise OSError()
+                    target.write(chunk)
+        except OSError:
+            destination.unlink(missing_ok=True)
+            raise self.c.Error('Clip konnte nicht aus Playback geladen werden.') from None
+
     def install_routes(self):
         c, media = self.c, self.media
         expert = lambda function: c.login_required(c.expert_required(function))
+
+        @c.app.get('/api/clips')
+        @c.login_required
+        def clip_list(user):
+            return jsonify(clips=c.rows('SELECT id,name,source,start,duration,size,created FROM clips WHERE user_id=? ORDER BY created DESC',(user['id'],)))
+
+        @c.app.post('/api/clips')
+        @expert
+        def clip_create(user):
+            body=self.media.body()
+            source=str(body.get('source','live'))
+            start=self.timestamp(body.get('start'))
+            try:duration=float(body.get('duration'))
+            except (TypeError,ValueError):raise c.Error('Ungültige Clipdauer.') from None
+            if not 0<duration<=300:raise c.Error('Clips dürfen höchstens fünf Minuten lang sein.')
+            name=str(body.get('name','Clip')).strip()
+            if not 1<=len(name)<=100 or any(ord(char)<32 for char in name):raise c.Error('Ungültiger Clipname.')
+            with c.LOCK:
+                if len(c.rows('SELECT id FROM clips WHERE user_id=?',(user['id'],)))+self.active_clips.get(user['id'],0)>=100:
+                    raise c.Error('Maximal 100 gespeicherte Clips pro Benutzer.')
+                if shutil.disk_usage(c.DATA).free < 500*1048576:
+                    raise c.Error('Für einen Clip müssen mindestens 500 MB frei sein.')
+                if not self.remux_slots.acquire(blocking=False):
+                    raise c.Error('Beide Playback-/Clip-Konvertierungen sind belegt. Bitte kurz warten.',http_status=429)
+                self.active_clips[user['id']]=self.active_clips.get(user['id'],0)+1
+            destination=None
+            try:
+                directory=c.DATA/'clips'/user['username'];directory.mkdir(parents=True,exist_ok=True)
+                destination=directory/(self.c.secrets.token_hex(16)+'.mp4')
+                self.create_clip(user,source,start,duration,destination)
+                ident=c.write('INSERT INTO clips(user_id,name,path,source,start,duration,size,created) VALUES (?,?,?,?,?,?,?,?)',
+                              (user['id'],name,str(destination),source,start.isoformat(),duration,destination.stat().st_size,self.c.time.time()))
+                return jsonify(ok=True,id=ident)
+            except Exception:
+                if destination is not None:destination.unlink(missing_ok=True)
+                raise
+            finally:
+                with c.LOCK:
+                    remaining=self.active_clips[user['id']]-1
+                    if remaining:self.active_clips[user['id']]=remaining
+                    else:self.active_clips.pop(user['id'],None)
+                self.remux_slots.release()
+
+        @c.app.get('/media/clip/<int:ident>')
+        @c.login_required
+        def clip_media(user,ident):
+            found=c.rows('SELECT * FROM clips WHERE id=? AND user_id=?',(ident,user['id']))
+            if not found or Path(found[0]['path']).is_symlink() or not Path(found[0]['path']).is_file():
+                raise c.Error('Clip nicht gefunden.',http_status=404)
+            return send_file(found[0]['path'],as_attachment=request.args.get('download')=='1',download_name='Clip-'+str(ident)+'.mp4')
+
+        @c.app.delete('/api/clips/<int:ident>')
+        @c.login_required
+        def clip_delete(user,ident):
+            found=c.rows('SELECT path FROM clips WHERE id=? AND user_id=?',(ident,user['id']))
+            if not found:raise c.Error('Clip nicht gefunden.',http_status=404)
+            Path(found[0]['path']).unlink(missing_ok=True)
+            c.write('DELETE FROM clips WHERE id=? AND user_id=?',(ident,user['id']))
+            return '',204
 
         @c.app.get('/api/playback/status')
         @expert

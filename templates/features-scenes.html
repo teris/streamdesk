@@ -1,0 +1,10 @@
+<section class="panel" data-expert-only {% if not expert %}hidden{% endif %}>
+    <h2 data-i18n="scenes">Szenen</h2>
+    <p class="small muted">Speichere Quellenprogramm, Overlay-Video und Ziele gemeinsam. Szenen werden nur bei gestopptem Ausgang angewendet.</p>
+    <form id="scene-form"><label>Name<input name="name" maxlength="80" required></label>
+        <label>Quellen (kommagetrennt)<input name="sources" value="source1,source2" required></label>
+        <label>Overlay-Video-ID (optional)<input name="video_id" type="number" min="1"></label>
+        <label>Ziele (kommagetrennt)<input name="targets" placeholder="twitch,youtube"></label>
+        <button class="secondary" type="submit">Szene speichern</button></form>
+    <div id="scene-list"></div>
+</section>

@@ -5,7 +5,8 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>Anmelden · MediaMTX - StreamDesk</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v={{app_version}}&amp;b={{asset_build}}">
+    <script src="/static/passkey-login.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
 </head>
 
 <body class="login-page">
@@ -19,7 +20,9 @@
                     type="password" autocomplete="current-password" required></label>{% if error %}<p class="error">
                 {{error}}</p>{% endif %}<button class="primary full" type="submit">Anmelden <span>→</span></button>
         </form>
-        <p class="small muted">Deinen Zugang erhältst du vom Administrator.</p>
+        <div class="video-actions"><button id="passkey-login" class="secondary" type="button">Mit Passkey anmelden</button><button id="recovery-login" class="ghost" type="button">Recovery-Code</button></div>
+        <p id="passkey-feedback" class="error" role="alert"></p>
+        <p class="small muted">Deinen Zugang erhältst du vom Administrator. · v{{app_version}}</p>
     </main>
 </body>
 

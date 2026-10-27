@@ -1,0 +1,27 @@
+<div class="discord-settings" data-expert-only {% if not expert %}hidden{% endif %}>
+    <section class="panel discord-connection">
+        <div class="section-heading"><h2>Discord verbinden</h2><span class="badge" id="discord-connection-state">Wird geprüft …</span></div>
+        <p class="muted small" id="discord-connection-description">Verbinde einen Bot mit einem Textkanal deines Discord-Servers.</p>
+        <form id="discord-form" autocomplete="off">
+            <label for="discord-channel-id">Discord-Kanal-ID<input id="discord-channel-id" name="channel_id" type="text" inputmode="numeric" pattern="[0-9]{15,25}" minlength="15" maxlength="25" autocomplete="off" placeholder="z. B. 123456789012345678" required aria-describedby="discord-channel-help"></label>
+            <p id="discord-channel-help" class="small muted">Die lange Zahl aus „Kanal-ID kopieren“ in Discord.</p>
+            <label for="discord-bot-token">Bot-Token<input id="discord-bot-token" name="bot_token" type="password" autocomplete="new-password" minlength="30" maxlength="200" required aria-describedby="discord-token-help"></label>
+            <p id="discord-token-help" class="small muted">Den Token im Developer Portal unter Bot → Reset Token erzeugen. Er wird verschlüsselt gespeichert und nach dem Speichern ausgeblendet.</p>
+            <div class="video-actions"><button class="secondary" type="submit">Discord verbinden</button><button class="ghost" id="discord-disconnect" type="button" disabled>Discord trennen</button></div>
+        </form>
+        <p class="small muted">Nach dem Verbinden kannst du Discord unter <a href="#chat">Chat &amp; Widget</a> auswählen. Der Chat bleibt beim Ausschalten des Expertenmodus nutzbar.</p>
+    </section>
+    <section class="panel discord-guide" id="discord-setup-guide" aria-labelledby="discord-guide-title">
+        <h2 id="discord-guide-title">Discord-Bot einrichten</h2>
+        <p class="small muted">Du benötigst einen Discord-Server, auf dem du Apps hinzufügen darfst. StreamDesk übernimmt den Betrieb des Bots.</p>
+        <ol class="setup-steps">
+            <li><strong>App anlegen</strong><p>Öffne das <a href="https://discord.com/developers/applications" target="_blank" rel="noopener noreferrer">Discord Developer Portal ↗</a>, wähle <b>New Application</b> und vergib einen Namen.</p></li>
+            <li><strong>Token und Nachrichtentexte freigeben</strong><p>Unter <b>Bot → Reset Token</b> erzeugst du den Bot-Token. Aktiviere unter <b>Privileged Gateway Intents</b> den <b>Message Content Intent</b> und speichere. So erhält StreamDesk auch den Text normaler Kanalnachrichten.</p></li>
+            <li><strong>Bot auf deinen Server einladen</strong><p>Unter <b>Installation</b> aktiviere <b>Guild Install</b>. Wähle <b>Discord Provided Link</b> und unter den Installations-Einstellungen den Scope <code>bot</code> mit <b>View Channels</b>, <b>Read Message History</b> und <b>Send Messages</b>. Öffne den Installationslink und wähle deinen Server.</p></li>
+            <li><strong>Kanal-ID kopieren</strong><p>In Discord unter <b>Benutzereinstellungen → Erweitert</b> den <b>Entwicklermodus</b> einschalten. Rechtsklick auf den gewünschten Textkanal → <b>Kanal-ID kopieren</b>. Die Bot-Rolle muss die drei Rechte auch in diesem Kanal besitzen.</p></li>
+            <li><strong>In StreamDesk einbinden</strong><p>Kanal-ID und Bot-Token im Formular eintragen und <b>Discord verbinden</b> wählen. Danach <a href="#chat">Chat &amp; Widget</a> öffnen und Discord als Chat auswählen.</p></li>
+        </ol>
+        <details class="discord-help"><summary>Verbindung klappt nicht?</summary><ul><li><b>Kanal nicht gefunden:</b> Kanal-ID, Servereinladung und Kanalrechte prüfen.</li><li><b>Nachrichten ohne Text:</b> Message Content Intent im Developer Portal prüfen. Für verifizierte Apps kann eine Freigabe durch Discord erforderlich sein.</li><li><b>Token ungültig:</b> Unter Bot → Reset Token neu erzeugen und hier erneut speichern.</li><li><b>Bot wird als offline angezeigt:</b> StreamDesk nutzt die Discord-HTTP-API. Eine grüne Online-Anzeige ist dafür nicht erforderlich.</li></ul></details>
+        <p class="small muted">Offizielle Hilfe: <a href="https://docs.discord.com/developers/quick-start/getting-started" target="_blank" rel="noopener noreferrer">App &amp; Bot erstellen</a> · <a href="https://docs.discord.com/developers/events/gateway#message-content-intent" target="_blank" rel="noopener noreferrer">Message Content Intent</a> · <a href="https://support.discord.com/hc/en-us/articles/206346498-Where-can-I-find-my-User-Server-Message-ID" target="_blank" rel="noopener noreferrer">Kanal-ID finden</a></p>
+    </section>
+</div>

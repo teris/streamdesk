@@ -48,16 +48,18 @@
         const footer=make('div',undefined,'source-footer'),toggle=button('Vorschau öffnen',()=>{frame.hidden=!frame.hidden;frame.src=frame.hidden?'about:blank':'/preview/source/'+source.key+'/';toggle.textContent=frame.hidden?'Vorschau öffnen':'Vorschau schließen';},'ghost source-preview-toggle');footer.append(make('span','— Mbit/s','rate'),toggle);
         card.append(heading,preview,footer,make('p',(source.fixed?'Feste Standardquelle':'Zusätzliche Quelle')+' · '+source.protocol.toUpperCase(),'small muted'));
         const details=make('details',undefined,'source-credentials');details.append(make('summary','Verbindungsdaten · '+source.label));const fields=make('div',undefined,'credential-fields');details.append(fields);
-        if(['rtmp','srt'].includes(source.protocol)){
+        if(['rtmp','srt','webrtc','mpegts','rtp','moq'].includes(source.protocol)){
           details.addEventListener('toggle',async()=>{
             if(!details.open){fields.replaceChildren();return;}if(fields.childElementCount)return;
             fields.textContent='Zugangsdaten werden geladen …';
             try{const result=await api('/api/ingest/'+source.key);if(!details.open)return;fields.replaceChildren();
-              credentialValue(fields,result.protocol==='srt'?'Vollständige SRT-Adresse':'RTMP-Serveradresse',result[result.protocol]);
-              fields.append(make('p','OBS: Dienst „Benutzerdefiniert“, diese Adresse als Server, Streamschlüssel leer. H.264 und AAC verwenden.','small muted'));
+              credentialValue(fields,'Publish-Adresse',result[result.protocol]);
+              fields.append(make('p','Nur Listener verwenden, die ein Administrator unter Protokolle aktiviert hat. H.264 und AAC sind die kompatibelste Wahl.','small muted'));
               const separate=make('details');separate.append(make('summary','Getrennte Felder für andere Apps'));
-              if(result.protocol==='srt'){credentialValue(separate,'SRT-Server',result.srt_server);credentialValue(separate,'Stream-ID',result.stream_id);separate.append(make('p','Modus Caller · Latenz 1000 ms · Paketgröße 1316','small muted'));}
-              else{credentialValue(separate,'Medien-Benutzername',result.username);credentialValue(separate,'Medien-Passwort',result.password);}
+              if(result.protocol==='srt'){credentialValue(separate,'SRT-Server',result.srt_server);credentialValue(separate,'Publish-Stream-ID',result.stream_id);credentialValue(separate,'SRT-Leseadresse',result.srt_read);separate.append(make('p','Modus Caller · Latenz 1000 ms · Paketgröße 1316','small muted'));}
+              else if(result.username){credentialValue(separate,'Medien-Benutzername',result.username);credentialValue(separate,'Medien-Passwort',result.password);}
+              if(result.protocol==='rtmp'&&result.rtmps)credentialValue(separate,'RTMPS-Adresse',result.rtmps);
+              if(result.sdp)credentialValue(separate,'RTP-SDP',result.sdp);
               fields.append(separate,button('Zugangsdaten verbergen',()=>{details.open=false;fields.replaceChildren();},'ghost'));
             }catch(error){fields.textContent=error.message;}
           });card.append(details);
@@ -78,8 +80,10 @@
     if(JSON.stringify([...record.options].map(option=>option.value))!==JSON.stringify(choices.map(row=>row[0]))){record.replaceChildren(...choices.map(row=>new Option(row[1],row[0])));record.value=choices.some(row=>row[0]===previous)?previous:'live';}
   }
   function render(data){status=data;sourceCards(data);program(data);if(!data.expert_mode){model=null;expertSignature='';find('#routing-source-editor').replaceChildren();}else if(location.hash.startsWith('#expert'))load();}
-  async function load(force=false){if(!status?.expert_mode||loading||model&&!force)return;loading=true;
-    try{model=await api('/api/routing');if(!status.expert_mode)return;experts();}catch(error){notify(error.message,true);}finally{loading=false;}}
+  async function load(force=false){if(!window.StreamDeskServices.allowed('advanced_routing')||!status?.expert_mode||loading||model&&!force)return;loading=true;
+    try{model=await api('/api/routing');if(!status.expert_mode)return;experts();
+      find('#policy-healthy').value=model.policy.healthy_seconds;find('#policy-stall').value=model.policy.stall_seconds;find('#policy-retry').value=model.policy.retry_seconds;find('#policy-native-standby').checked=!!model.policy.native_standby;
+    }catch(error){notify(error.message,true);}finally{loading=false;}}
   function sourceEditor(){
     const source=model.sources.find(row=>row.key===selectedSource)||model.sources[0];selectedSource=source.key;
     const nav=find('#routing-source-nav');nav.replaceChildren();
@@ -88,11 +92,14 @@
     if(source.fixed)editor.append(make('p','Feste Standardquelle · '+source.protocol.toUpperCase()+' · Priorität '+source.priority+'. Name, Protokoll und Priorität bleiben unverändert.','small muted'));
     else{
       const form=make('form'),name=field(form,'Name','text',source.label),priority=field(form,'Priorität / Ebene','number',source.priority);name.maxLength=60;priority.min=3;priority.max=999;
-      const typeLabel=make('label','Verbindung'),type=make('select');for(const [value,label]of[['srt','SRT-Publish'],['rtmp','RTMP-Publish'],['rtsp','RTSP-Pull']])type.append(new Option(label,value));type.value=source.protocol==='rtsps'?'rtsp':source.protocol;typeLabel.append(type);form.append(typeLabel);
-      const url=field(form,'Neue Pull-Adresse (leer = behalten)','password');url.autocomplete='new-password';url.parentElement.hidden=!['rtsp','rtsps'].includes(source.protocol);type.addEventListener('change',()=>url.parentElement.hidden=type.value!=='rtsp');
+      const typeLabel=make('label','Verbindung'),type=make('select');for(const [value,label]of[['srt','SRT-Publish'],['rtmp','RTMP-Publish'],['webrtc','WebRTC/WHIP'],['mpegts','MPEG-TS Publish'],['rtp','RTP Publish'],['moq','Media-over-QUIC'],['rtsp','RTSP-Pull'],['proxy','Pfad-Proxy']])type.append(new Option(label,value));type.value=source.protocol==='rtsps'?'rtsp':source.protocol;typeLabel.append(type);form.append(typeLabel);
+      const url=field(form,'Neue Pull-/UDP-Adresse (leer = behalten)','password');url.autocomplete='new-password';
+      const sdpLabel=make('label','Neue RTP-SDP'),sdp=make('textarea');sdp.rows=7;sdp.maxLength=8192;sdpLabel.append(sdp);form.append(sdpLabel);
+      const fields=()=>{url.parentElement.hidden=!['rtsp','mpegts','rtp','proxy'].includes(type.value);sdpLabel.hidden=type.value!=='rtp';};fields();type.addEventListener('change',fields);
       const enabledLabel=make('label',' Quelle aktiviert','feature-check'),enabled=make('input');enabled.type='checkbox';enabled.checked=source.enabled;enabledLabel.prepend(enabled);form.append(enabledLabel);
+      const demandLabel=make('label',' Source nur bei Lesebedarf verbinden','feature-check'),demand=make('input');demand.type='checkbox';demand.checked=!!source.source_on_demand;demandLabel.prepend(demand);form.append(demandLabel);
       const save=make('button','Quelleneinstellungen speichern','secondary');form.append(save,button('Quelle entfernen',()=>action(async()=>{await api('/api/routing/sources/'+source.key+'/delete',{});selectedSource='source1';await load(true);},'Quelle entfernt. Vorhandene Aufnahmen bleiben erhalten.',form),'ghost'));
-      form.addEventListener('submit',event=>{event.preventDefault();const body={label:name.value,priority:Number(priority.value),protocol:type.value,url:url.value,enabled:enabled.checked};action(async()=>{await api('/api/routing/sources/'+source.key,body);url.value='';await load(true);},'Quelle gespeichert.',form);});editor.append(form);
+      form.addEventListener('submit',event=>{event.preventDefault();const body={label:name.value,priority:Number(priority.value),protocol:type.value,url:url.value,sdp:sdp.value,enabled:enabled.checked,source_on_demand:demand.checked};action(async()=>{await api('/api/routing/sources/'+source.key,body);url.value='';sdp.value='';await load(true);},'Quelle gespeichert.',form);});editor.append(form);
     }
     const routes=make('form'),heading=make('h4','Diese Quelle an folgende Ausgänge routen');routes.append(heading);
     for(const output of model.outputs){const label=make('label',output.label+(output.configured?'':' · Zugangsdaten fehlen'),'feature-check'),input=make('input');input.type='checkbox';input.value=output.kind;input.checked=output.sources.includes(source.key);input.disabled=(status.output_states?.[output.kind]||'stopped')!=='stopped';label.prepend(input);routes.append(label);}
@@ -115,8 +122,9 @@
     for(const output of model.outputs){const row=make('tr'),program=status?.programs?.find(group=>group.id===output.program),name=make('td',output.label),route=make('td',chain(output.sources)),current=make('td',program?.selected_source?sourceName(program.selected_source):program?.offline_playing?'Offline-Video':'Standby');row.append(name,route,current);row.append(make('td'));row.lastChild.append(button('Vorschau',()=>{selectedTarget=output.kind;location.hash='#dashboard';},'ghost'));table.append(row);}wrapper.append(table);}
   find('#program-select').addEventListener('change',event=>{selectedTarget=event.target.value;program();});
   find('#program-link-copy').addEventListener('click',async()=>{try{await navigator.clipboard.writeText(find('#program-link').value);notify('Programmvorschau-Link kopiert.');}catch(_){notify('Bitte den Link markieren und kopieren.',true);}});
-  find('#source-protocol').addEventListener('change',()=>find('#source-pull-field').hidden=find('#source-protocol').value!=='rtsp');
-  find('#source-create').addEventListener('submit',event=>{event.preventDefault();const body={label:find('#source-label').value,protocol:find('#source-protocol').value,url:find('#source-url').value};action(async()=>{const result=await api('/api/routing/sources',body);find('#source-create').reset();find('#source-pull-field').hidden=true;selectedSource=result.key;await load(true);},'Zusätzliche Quelle angelegt. Jetzt ihre Ausgänge wählen.',event.currentTarget);});
+  find('#source-protocol').addEventListener('change',()=>{const protocol=find('#source-protocol').value;find('#source-pull-field').hidden=!['rtsp','mpegts','rtp','proxy'].includes(protocol);find('#source-sdp-field').hidden=protocol!=='rtp';});
+  find('#source-create').addEventListener('submit',event=>{event.preventDefault();const body={label:find('#source-label').value,protocol:find('#source-protocol').value,url:find('#source-url').value,sdp:find('#source-sdp').value};action(async()=>{const result=await api('/api/routing/sources',body);find('#source-create').reset();find('#source-pull-field').hidden=true;find('#source-sdp-field').hidden=true;selectedSource=result.key;await load(true);},'Zusätzliche Quelle angelegt. Jetzt ihre Ausgänge wählen.',event.currentTarget);});
+  find('#routing-policy-form').addEventListener('submit',event=>{event.preventDefault();action(async()=>{await api('/api/routing/policy',{healthy_seconds:Number(find('#policy-healthy').value),stall_seconds:Number(find('#policy-stall').value),retry_seconds:Number(find('#policy-retry').value),native_standby:find('#policy-native-standby').checked});await load(true);},'Fallbackregeln gespeichert.',event.currentTarget);});
   find('#routing-output-platform').addEventListener('change',()=>{const custom=find('#routing-output-platform').value==='custom';find('#routing-key-field').hidden=custom;find('#routing-url-field').hidden=!custom;});
   find('#routing-output-create').addEventListener('submit',event=>{event.preventDefault();const body={label:find('#routing-output-label').value,platform:find('#routing-output-platform').value,key:find('#routing-output-key').value,url:find('#routing-output-url').value};action(async()=>{await api('/api/routing/outputs',body);find('#routing-output-create').reset();find('#routing-key-field').hidden=false;find('#routing-url-field').hidden=true;await load(true);},'Ausgang angelegt. Unter Quellen & Routing die gewünschten Quellen zuordnen.',event.currentTarget);});
   window.addEventListener('hashchange',()=>{if(['#expert-routing','#expert-outputs'].includes(location.hash))load(true);});

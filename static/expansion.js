@@ -8,7 +8,7 @@
     find('#playback-download').hidden = true;
   }
   async function load(force=false){
-    if(!status?.expert_mode||loading||!force&&loaded)return;
+    if(!window.StreamDeskServices.allowed('playback')||!status?.expert_mode||loading||!force&&loaded)return;
     loading=true;
     try{
       const playback=await api('/api/playback/status');if(!status?.expert_mode)return;
@@ -17,6 +17,8 @@
       select.replaceChildren(...playback.sources.map(source=>new Option(playback.labels?.[source]||window.StreamDeskRouting?.sourceName(source)||source,source)));
       select.value=playback.sources.includes(selected)?selected:'live';
       if(find('#playback-enabled')){find('#playback-enabled').checked=playback.enabled;find('#playback-address').value=playback.address;}
+      const clips=await api('/api/clips'),clipList=find('#clip-list');clipList.replaceChildren();
+      for(const clip of clips.clips){const row=document.createElement('p'),link=document.createElement('a');link.href='/media/clip/'+clip.id;link.textContent=clip.name+' · '+Math.round(clip.duration)+' s';const remove=document.createElement('button');remove.type='button';remove.className='ghost';remove.textContent='Löschen';remove.addEventListener('click',async()=>{await api('/api/clips/'+clip.id,{},'DELETE');await load(true);});row.append(link,' ',remove);clipList.append(row);}
       loaded=true;
     }catch(error){notify(error.message,true);}finally{loading=false;}
   }
@@ -55,6 +57,10 @@
     const duration = Number(find('#playback-duration').value), source = find('#playback-source').value;
     play('/api/playback/'+source+'/media?'+new URLSearchParams({start,duration,format:'fmp4'}),source,start,duration);
   },'Ausschnitt geöffnet.');
+  submit('#clip-create',async()=>{
+    await api('/api/clips',{name:find('#clip-name').value,source:find('#playback-source').value,start:new Date(find('#clip-start').value).toISOString(),duration:Number(find('#clip-duration').value)});
+    find('#clip-name').value='';await load(true);
+  },'Clip gespeichert.');
   find('#playback-source').addEventListener('change',() => {stopPlayback();find('#playback-spans').replaceChildren();});
   video.addEventListener('error',() => {if(video.getAttribute('src'))notify('Wiedergabe nicht verfügbar. Zeitraum, Aufnahmeformat und Serverstatus prüfen.',true);});
 })();
