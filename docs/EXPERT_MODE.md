@@ -1,6 +1,6 @@
-# Expertenmodus und Medienerweiterungen · 1.1.0-rc.6
+# Expertenmodus und Medienerweiterungen · 1.1.6
 
-Den eigenen Menüpunkt **Expertenmodus** öffnen, den Modus aktivieren und **Modus übernehmen** wählen. Die Untermenüs „Protokolle & WebRTC“, „Quellen & Routing“, „Ausgänge & Konten“, „Native Aufnahme“, „Playback“, „Zuschauerfreigabe“ und „Neuverbindung“ bündeln die technischen Einstellungen. Die normalen Ansichten behalten ihre grundlegenden Funktionen. Er gilt für die aktuelle Anmeldung. Eine weitere Anmeldung startet mit ausgeschaltetem Expertenmodus, auch beim selben Benutzer. Das Backend prüft technische Anfragen zusätzlich zur Sichtbarkeit in der Oberfläche. Ein Administratorkonto umgeht diese Prüfung nicht.
+Den eigenen Menüpunkt **Expertenmodus** öffnen, den Modus aktivieren und **Modus übernehmen** wählen. Die Untermenüs „Protokolle & WebRTC“, „Quellen & Routing“, „Ausgänge & Konten“, „Native Aufnahme“, „Playback“, „Zuschauerfreigabe“, „Neuverbindung“, „Automation & Export“ und „Discord-Bot“ bündeln die technischen Einstellungen. Die normalen Ansichten behalten ihre grundlegenden Funktionen. Er gilt für die aktuelle Anmeldung. Eine weitere Anmeldung startet mit ausgeschaltetem Expertenmodus, auch beim selben Benutzer. Das Backend prüft technische Anfragen zusätzlich zur Sichtbarkeit in der Oberfläche. Ein Administratorkonto umgeht diese Prüfung nicht.
 
 | Immer verfügbar | Nur im Expertenmodus |
 | --- | --- |
@@ -11,6 +11,9 @@ Den eigenen Menüpunkt **Expertenmodus** öffnen, den Modus aktivieren und **Mod
 | Vorhandene native Segmente herunterladen / fMP4 ansehen | Öffentliche Zuschauerfreigabe erstellen, erneuern oder widerrufen |
 | Theme und mobile Bedienung | WebRTC-Kamera/-Vorschau, Playback eigener Segmente |
 | Gespeicherte Streamingziele für den Gesamtstart auswählen | Weitere Twitch-/YouTube-Konten, eigene Anbieter und Pull-Adressen konfigurieren |
+| Eingerichteten Discord-Chat lesen und verwenden | Discord-Bot verbinden und trennen; Anleitung siehe [Discord](DISCORD.md) |
+
+Die normalen **Einstellungen** haben eigene Unterseiten für **Streaming-Auswahl**, **Twitch**, **YouTube**, **Eigener Anbieter** und **Darstellung & Sprache**. Twitch-/YouTube-Kontofreigaben, ihre Streamschlüssel und der feste eigene Anbieter bleiben ohne Expertenmodus verwaltbar.
 
 Globale WebRTC- und Playback-Einstellungen benötigen **Administratorrechte und aktivierten Expertenmodus**. Benutzer können nur ihre eigenen Quellen, Ziele, Aufnahmen und Zuschauerfreigaben verwalten.
 

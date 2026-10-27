@@ -29,10 +29,15 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from flask.sessions import SecureCookieSessionInterface
 import yaml
 from media_config import list_items
+from mediamtx_client import MediaMTXClient, MediaMTXClientError
 
+APP_VERSION = Path(__file__).with_name('VERSION').read_text().strip()
 DATA = Path(os.getenv('STREAMDESK_DATA', '/var/lib/streamdesk'))
 CONFIG = Path(os.getenv('MEDIAMTX_CONFIG', '/opt/mediamtx/mediamtx.yml'))
 API = os.getenv('MEDIAMTX_API', 'http://127.0.0.1:9997/v3/')
+API_CA = os.getenv('MEDIAMTX_API_CA', '')
+MEDIA_CLIENT = MediaMTXClient(API, API_CA or None)
+METRICS = os.getenv('MEDIAMTX_METRICS', 'http://127.0.0.1:9998/metrics')
 HLS = os.getenv('MEDIAMTX_HLS', 'http://127.0.0.1:8888/')
 PUBLIC = os.getenv('STREAMDESK_PUBLIC', 'http://localhost:8080').rstrip('/')
 HOST = os.getenv('STREAMDESK_INGEST', '127.0.0.1')
@@ -40,6 +45,7 @@ DEFAULT_CLIP = Path(os.getenv('STREAMDESK_DEFAULT_CLIP', str(DATA / 'standby.mp4
 RTSP = os.getenv('MEDIAMTX_RTSP', 'rtsp://127.0.0.1:8554/').rstrip('/') + '/'
 RTMP_PORT = int(os.getenv('MEDIAMTX_RTMP_PORT', '1935'))
 SRT_PORT = int(os.getenv('MEDIAMTX_SRT_PORT', '8890'))
+MOQ_PORT = int(os.getenv('MEDIAMTX_MOQ_PORT', '8892'))
 NAMESPACE = os.getenv('STREAMDESK_NAMESPACE', 'streamdesk')
 if not re.fullmatch(r'[a-z][a-z0-9_-]{0,39}', NAMESPACE):
     raise RuntimeError('Ungültiger StreamDesk-Namensbereich')
@@ -62,6 +68,10 @@ CHAT_SCOPES = {'user:read:chat', 'user:write:chat'}
 TWITCH_SCOPES = {'channel:read:stream_key', 'channel:manage:broadcast'}
 _DUMMY_PASSWORD_HASH = generate_password_hash('streamdesk-timing-dummy')
 app = Flask(__name__)
+app.jinja_env.globals['app_version'] = APP_VERSION
+app.jinja_env.globals['asset_build'] = hashlib.sha256(b''.join(
+    path.name.encode() + b'\0' + path.read_bytes() for path in sorted(Path(__file__).with_name('static').iterdir()) if path.is_file()
+)).hexdigest()[:12]
 app.config.update(MAX_CONTENT_LENGTH=501 * 1024 * 1024, SESSION_COOKIE_HTTPONLY=True,
                   SESSION_COOKIE_SAMESITE='Lax', SESSION_COOKIE_SECURE=os.getenv('COOKIE_SECURE', '0') == '1')
 if TRUST_PROXY:
@@ -132,12 +142,35 @@ def atomic(path, content):
             file.flush()
             os.fsync(file.fileno())
         os.chmod(temp, previous.st_mode & 0o777 if previous else 0o600)
-        if previous and os.geteuid() == 0:
-            os.chown(temp, previous.st_uid, previous.st_gid)
+        if previous:
+            os.chown(temp, previous.st_uid if os.geteuid() == 0 else -1, previous.st_gid)
         os.replace(temp, path)
     finally:
         if os.path.exists(temp):
             os.unlink(temp)
+
+
+def native_standby_file(user):
+    root = Path(os.getenv('STREAMDESK_NATIVE_ROOT', str(DATA.parent / (DATA.name + '-native'))))
+    folder = root / user['username']
+    if not root.is_dir() or folder.is_symlink():
+        raise Error('Das gemeinsame Aufnahmeverzeichnis ist für das Standby-Video nicht verfügbar.')
+    folder.mkdir(mode=0o2770, exist_ok=True)
+    source = Path(user['offline'])
+    metadata = source.stat()
+    key = hashlib.sha256((str(source)+':'+str(metadata.st_mtime_ns)+':'+str(metadata.st_size)).encode()).hexdigest()[:16]
+    target = folder / ('.standby-'+key+'.mp4')
+    if not target.is_file():
+        fd, temporary = tempfile.mkstemp(dir=folder, prefix='.standby-tmp-')
+        os.close(fd)
+        try:
+            shutil.copyfile(source, temporary)
+            os.chown(temporary, -1, root.stat().st_gid)
+            os.chmod(temporary, 0o640)
+            os.replace(temporary, target)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+    return str(target)
 
 
 def encrypt(value):
@@ -157,10 +190,10 @@ def set_setting(name, value):
     write('INSERT OR REPLACE INTO settings(name,value) VALUES (?,?)', (name, encrypt(value)))
 
 
-def remote(url, data=None, headers=None, method=None):
+def remote(url, data=None, headers=None, method=None, context=None):
     req = urllib.request.Request(url, data=data, headers=headers or {}, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=8) as response:
+        with urllib.request.urlopen(req, timeout=8, context=context) as response:
             content = response.read()
             return json.loads(content) if content else {}
     except urllib.error.HTTPError as exc:
@@ -170,8 +203,10 @@ def remote(url, data=None, headers=None, method=None):
 
 
 def mtx(path, value=None, method=None):
-    return remote(API + path, json.dumps(value).encode() if value is not None else None,
-                  {'Content-Type': 'application/json'}, method or ('PATCH' if value is not None else 'GET'))
+    try:
+        return MEDIA_CLIENT.call(path, value, method)
+    except MediaMTXClientError as error:
+        raise Error('Verbindung zu MediaMTX fehlgeschlagen.', status=error.status) from None
 
 
 def media_username(user):
@@ -238,18 +273,22 @@ def reconcile():
     """Persist only owned paths, ACLs and program groups; keep foreign state intact."""
     with LOCK:
         config = yaml.safe_load(CONFIG.read_text())
+        SERVICES.capture_records(config)
         from media_config import merge_auth
         managed_auth, obsolete = [], []
         all_paths = config.setdefault('paths', {})
         for user in rows('SELECT * FROM users'):
+            if user.get('role') == 'moderator':
+                user['active'] = False
             catalog = MODEL.sources(user, archived=True)
             current = {row['key']:row for row in catalog if not row.get('deleted')}
             programs = MODEL.programs(user, archived=True)
+            policy = MODEL.policy(user)
             if user['active']:
                 managed_auth.append({
                     'user':media_username(user),'pass':decrypt(user['media_secret']),'ips':[],
                     'permissions':[{'action':'publish','path':user['prefix']+row['key']} for row in current.values()
-                                   if row['enabled'] and row['protocol'] in ('rtmp','srt')]
+                                   if row['enabled'] and SERVICES.source_allowed(row) and row['protocol'] in ('rtmp','srt','webrtc','moq')]
                         + [{'action':'read','path':name} for name in
                            [*(user['prefix']+row['key'] for row in catalog),user['prefix']+'replay',
                             *(row['path'] for row in programs),*(row['rtc_path'] for row in programs if row['active'])]]
@@ -257,9 +296,17 @@ def reconcile():
             for row in catalog:
                 name = user['prefix']+row['key']
                 settings = all_paths.setdefault(name, {})
-                enabled = bool(user['active']) and row['enabled'] and not row.get('deleted')
-                settings.update(source=decrypt(row['endpoint']) if enabled and row['protocol'] in ('rtsp','rtsps') else 'publisher',
-                                sourceOnDemand=False,rtspTransport='tcp',overridePublisher=False,alwaysAvailable=False)
+                enabled = bool(user['active']) and row['enabled'] and not row.get('deleted') and SERVICES.source_allowed(row)
+                endpoint = decrypt(row.get('endpoint', ''))
+                static = json.loads(endpoint) if enabled and row['protocol'] in ('mpegts','rtp') and endpoint else {}
+                external_source = bool(static) or row['protocol'] in ('rtsp','rtsps','proxy')
+                settings.update(source=static.get('url') if static else endpoint if enabled and row['protocol'] in ('rtsp','rtsps','proxy') else 'publisher',
+                                sourceOnDemand=bool(row.get('source_on_demand')) if enabled and external_source else False,
+                                rtspTransport='tcp',overridePublisher=False,alwaysAvailable=False)
+                if row['protocol'] == 'rtp' and static:
+                    settings['rtpSDP'] = static['sdp']
+                else:
+                    settings.pop('rtpSDP', None)
                 settings.setdefault('record',False)
                 if not enabled:
                     settings['record'] = False
@@ -273,7 +320,8 @@ def reconcile():
                 enabled = bool(user['active']) and program['active']
                 settings = all_paths.setdefault(program['path'], {})
                 settings.update(source='publisher',overridePublisher=False,alwaysAvailable=enabled,
-                                alwaysAvailableFile='',alwaysAvailableTracks=STANDBY_TRACKS,
+                                alwaysAvailableFile=native_standby_file(user) if policy['native_standby'] and enabled else '',
+                                alwaysAvailableTracks=STANDBY_TRACKS,
                                 alwaysAvailableRecorded=True,forward=[])
                 settings.setdefault('record',False)
                 if not enabled:
@@ -299,19 +347,23 @@ def reconcile():
                     targets = legacy
                 if kind == 'twitch' and legacy_dest and user['output_kind']=='custom' and decrypt(user['output'])==legacy_dest:
                     targets = []
-                if not user['active']:
+                if not user['active'] or not SERVICES.output_allowed(kind):
                     targets = []
                 program = MODEL.output_program(user,kind)
                 outgoing.update(source=RTSP+program['path'] if targets else 'publisher',sourceOnDemand=False,
                                 rtspTransport='tcp',alwaysAvailable=False,record=False,forward=targets)
                 all_paths[name] = outgoing
+        SERVICES.mask_config(config, managed_auth)
         merge_auth(config,NAMESPACE,managed_auth,LOCAL_IPS)
         atomic(CONFIG,yaml.safe_dump(config,sort_keys=False,allow_unicode=True))
+        SERVICES.reconciled()
         if os.getenv('STREAMDESK_ENGINE','1')=='1':
             try:
                 sync_media_runtime(obsolete)
             except Error:
                 logging.warning('MediaMTX ist für den sofortigen Abgleich noch nicht erreichbar; Konfiguration wurde gespeichert.')
+                return False
+        return True
 
 
 def sync_media_runtime(obsolete_paths=()):
@@ -378,9 +430,13 @@ def initialize():
                                   ('source_mode', "TEXT NOT NULL DEFAULT 'auto'"),
                                   ('source3_protocol', "TEXT NOT NULL DEFAULT 'srt'"),
                                   ('pull_url', "TEXT NOT NULL DEFAULT ''"), ('pull_enabled', 'INTEGER NOT NULL DEFAULT 0'),
-                                  ('theme', "TEXT NOT NULL DEFAULT 'system'")]:
+                                  ('theme', "TEXT NOT NULL DEFAULT 'system'"),
+                                  ('language', "TEXT NOT NULL DEFAULT 'de'"),
+                                  ('role', "TEXT NOT NULL DEFAULT 'user'"),
+                                  ('chat_owner_id', 'INTEGER')]:
             if name not in columns:
                 connection.execute(f'ALTER TABLE users ADD COLUMN {name} {declaration}')
+        connection.execute("UPDATE users SET role='admin' WHERE admin=1 AND role!='admin'")
         video_columns = {r['name'] for r in connection.execute('PRAGMA table_info(videos)')}
         for column, default in [('overlay_style', "'{}'"), ('browser_url', "''")]:
             if column not in video_columns:
@@ -412,8 +468,8 @@ def add_user(username, password, admin=False, legacy=False):
         shutil.copyfile(DEFAULT_CLIP, offline)
         try:
             reserved = write('INSERT INTO user_id_sequence DEFAULT VALUES', ())
-            uid = write('INSERT INTO users(id,username,password,admin,prefix,media_secret,offline) VALUES (?,?,?,?,?,?,?)',
-                        (reserved, username, generate_password_hash(password), int(admin), prefix,
+            uid = write('INSERT INTO users(id,username,password,admin,role,prefix,media_secret,offline) VALUES (?,?,?,?,?,?,?,?)',
+                        (reserved, username, generate_password_hash(password), int(admin), 'admin' if admin else 'user', prefix,
                          encrypt(secrets.token_urlsafe(24)), str(offline)))
             video_id = write('INSERT INTO videos(user_id,name,path,size,created) VALUES (?,?,?,?,?)',
                              (uid, 'Standard-Offline-Video', str(offline), offline.stat().st_size, int(time.time())))
@@ -440,6 +496,17 @@ def login_required(function):
         user = current()
         if not user:
             return (jsonify(error='Bitte erneut anmelden.'), 401) if request.path.startswith('/api/') else redirect('/login')
+        if user['role'] == 'moderator':
+            allowed = request.path in ('/', '/api/logout', '/api/chat', '/api/chat/send', '/api/password')
+            if not allowed:
+                raise Error('Moderatoren dürfen ausschließlich den Chat verwenden.', http_status=403)
+            if request.path.startswith('/api/chat'):
+                target = rows("SELECT * FROM users WHERE id=? AND active=1 AND role!='moderator'", (user['chat_owner_id'],))
+                if not target:
+                    raise Error('Das zugewiesene Chat-Konto ist nicht verfügbar.', http_status=403)
+                target[0]['actor_id'] = user['id']
+                target[0]['actor_role'] = 'moderator'
+                user = target[0]
         return function(user, *args, **kwargs)
     return wrapped
 
@@ -503,6 +570,23 @@ def prune_attempts(now):
             ATTEMPTS.pop(key, None)
 
 
+def login_limited(username):
+    with LOCK:
+        prune_attempts(time.time())
+        return any(len(ATTEMPTS.get(key, ())) >= 10 for key in
+                   ('ip:' + (request.remote_addr or 'unknown'), 'user:' + username[:100]))
+
+
+def login_failure(username):
+    with LOCK:
+        now = time.time()
+        prune_attempts(now)
+        for key in ('ip:' + (request.remote_addr or 'unknown'), 'user:' + username[:100]):
+            ATTEMPTS.setdefault(key, []).append(now)
+        while len(ATTEMPTS) > 4000:
+            ATTEMPTS.pop(next(iter(ATTEMPTS)))
+
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     error = ''
@@ -549,8 +633,16 @@ def logout():
 @app.get('/')
 @login_required
 def index(user):
+    if user['role'] == 'moderator':
+        return render_template('moderator.html', user=user, csrf=session['csrf'], language=user['language'])
     return render_template('index.html', user=user, csrf=session['csrf'], public=PUBLIC,
-                           expert=session.get('expert_mode') is True)
+                           expert=session.get('expert_mode') is True, language=user['language'], services=SERVICES.flags())
+
+
+@app.get('/healthz')
+def healthz():
+    ready = READY.is_set() and ENGINE.running and ENGINE.thread is not None and ENGINE.thread.is_alive()
+    return jsonify(ok=ready), 200 if ready else 503
 
 
 def update_stream_time(user, state, enabled, stamp=None):
@@ -572,6 +664,40 @@ def update_stream_time(user, state, enabled, stamp=None):
 
 
 MEDIA_STATS_CACHE = {}
+PROMETHEUS_CACHE = {}
+
+
+def prometheus_metrics(user):
+    """Return only aggregate values belonging to the authenticated tenant."""
+    now = time.monotonic()
+    cached = PROMETHEUS_CACHE.get(user['id'])
+    if cached and now - cached[0] < 5:
+        return cached[1]
+    result = {'readers': 0, 'errors': 0}
+    try:
+        with urllib.request.urlopen(METRICS, timeout=2) as response:
+            text = response.read(2 * 1024 * 1024).decode('utf-8', 'replace')
+        prefix = user['prefix']
+        for line in text.splitlines():
+            match = re.match(r'^([A-Za-z_:][A-Za-z0-9_:]*)\{([^}]*)\}\s+([-+0-9.eE]+)', line)
+            if not match:
+                continue
+            labels = dict(re.findall(r'([A-Za-z_][A-Za-z0-9_]*)="((?:[^"\\\\]|\\\\.)*)"', match[2]))
+            path = labels.get('name') or labels.get('path') or ''
+            if not path.startswith(prefix):
+                continue
+            value = float(match[3])
+            metric = match[1].lower()
+            if metric.endswith('readers') or metric.endswith('readers_count'):
+                result['readers'] += max(0, int(value))
+            if 'error' in metric or 'failed' in metric:
+                result['errors'] += max(0, int(value))
+    except (OSError, ValueError):
+        result['available'] = False
+    else:
+        result['available'] = True
+    PROMETHEUS_CACHE[user['id']] = (now, result)
+    return result
 
 
 def dashboard_stats(user):
@@ -581,7 +707,7 @@ def dashboard_stats(user):
         videos = rows('SELECT id,duration FROM videos WHERE user_id=?', (uid,))
         recordings = rows("SELECT duration FROM recordings WHERE user_id=? AND status='ready'", (uid,))
         used = 0
-        for category in ('media', 'recordings'):
+        for category in ('media', 'recordings', 'clips'):
             directory = DATA / category / user['username']
             if directory.is_dir():
                 for path in directory.iterdir():
@@ -617,11 +743,13 @@ def probe_video_durations():
 @app.get('/api/status')
 @login_required
 def status(user):
+    prometheus = prometheus_metrics(user)
     with LOCK:
         snapshot = dict(ENGINE.snapshot.get(user['id'],{'ok':False,'error':'Verbindung wird aufgebaut …'}))
         source_status = {row['key']:row for row in snapshot.get('sources',[]) if 'key' in row}
         snapshot['sources'] = [dict(row,**{key:source_status.get(row['key'],{}).get(key,value) for key,value in
-                                           (('state','offline'),('mbps',0),('tracks',[]))}) for row in MODEL.public_sources(user)]
+                                           (('state','offline'),('mbps',0),('tracks',[]))}) for row in MODEL.public_sources(user)
+                               if SERVICES.source_allowed(row)]
         program_status = {row['id']:row for row in snapshot.get('programs',[])}
         snapshot['programs'] = [dict(row,**{key:program_status.get(row['id'],{}).get(key,value) for key,value in
             (('available',False),('selected_source',None),('offline_playing',False),('browser_status','off'))},
@@ -631,13 +759,21 @@ def status(user):
         by_kind={row['kind']:row for row in destinations(user)}
         outputs = [{'kind':row['kind'],'platform':row['kind'].split('-')[0],'configured':bool(row['endpoint']),
                     'label':row.get('label') or {'twitch':'Twitch','youtube':'YouTube','custom':'Eigener Anbieter'}.get(row['kind'],'Weiterer Ausgang'),
-                    'selected':bool(row['selected']),'sources':MODEL.route(user,row['kind']),
+                    'selected':bool(row['selected']),'allowed':SERVICES.output_allowed(row['kind']),'sources':MODEL.route(user,row['kind']),
                     'program':MODEL.output_program(user,row['kind'])['id']} for row in [by_kind[kind] for kind in output_kinds(user) if kind in by_kind]]
-        return jsonify(**snapshot,user={'username':user['username'],'admin':bool(user['admin'])},
+        try:
+            bandwidth_limit = max(0, float(setting('bandwidth_limit_mbps', '0') or 0))
+        except ValueError:
+            bandwidth_limit = 0
+        snapshot['metrics'] = prometheus
+        snapshot['bandwidth_limit_mbps'] = bandwidth_limit
+        snapshot['bandwidth_warning'] = bool(bandwidth_limit and snapshot.get('send_mbps', 0) >= bandwidth_limit * .85)
+        return jsonify(**snapshot,app_version=APP_VERSION,services=SERVICES.flags(),user={'username':user['username'],'admin':bool(user['admin'])},
             expert_mode=session.get('expert_mode') is True,source_mode='auto',theme=user['theme'],
+            language=user['language'],role=user['role'],
             offline_video=selected[0] if selected else None,recording=recording_status(user),replay_id=user['replay_recording_id'],stats=dashboard_stats(user),
             renewal={'interval':user['renew_interval'],'gap':user['renew_gap'],'next':user['renew_next'],'resume':user['renew_resume'],'last':user['renew_last']},
-            output={'configured':bool(destinations(user,True)),'kind':'multi' if len(destinations(user,True))>1 else next((row['kind'] for row in destinations(user,True)),user['output_kind']),'account':user['twitch_name']},
+            output={'configured':any(SERVICES.output_allowed(row['kind']) for row in destinations(user,True)),'kind':'multi' if len(destinations(user,True))>1 else next((row['kind'] for row in destinations(user,True)),user['output_kind']),'account':user['twitch_name']},
             outputs=outputs,chat=CHAT.info(user),record_sources=MODEL.record_sources(user),
             oauth_ready=bool(setting('client_id') and setting('client_secret')),
             twitch_edit_ready=bool(rows('SELECT user_id FROM twitch_auth WHERE user_id=?',(user['id'],))),
@@ -647,16 +783,32 @@ def status(user):
 
 def source_ingest(user, key):
     source = MODEL.source(user,key)
-    if source['protocol'] not in ('rtmp','srt'):
+    if not SERVICES.source_allowed(source):
+        SERVICES.require('advanced_routing' if not source['fixed'] and not SERVICES.enabled('advanced_routing') else 'webrtc')
+    if source['protocol'] not in ('rtmp','srt','webrtc','mpegts','rtp','moq'):
         return {'key':key,'label':source['label'],'protocol':source['protocol']}
     path = user['prefix']+key
     name, secret = media_username(user),decrypt(user['media_secret'])
     query = urllib.parse.urlencode({'user':name,'pass':secret})
     stream_id = f'publish:{path}:{name}:{secret}'
     srt_query = urllib.parse.urlencode({'streamid':stream_id,'mode':'caller','latency':1000000,'pkt_size':1316},safe=':/')
+    if source['protocol'] in ('mpegts','rtp'):
+        settings = json.loads(decrypt(source['endpoint']))
+        parsed = urllib.parse.urlsplit(settings['url'])
+        return {'key':key,'label':source['label'],'protocol':source['protocol'],
+                source['protocol']:f'udp://{HOST}:{parsed.port}',
+                **({'sdp':settings['sdp']} if source['protocol']=='rtp' else {})}
+    read_id = urllib.parse.urlencode({'streamid':f'read:{path}:{name}:{secret}','mode':'caller','latency':1000000},safe=':/')
+    config=yaml.safe_load(CONFIG.read_text()) or {}
+    secure_address=urllib.parse.urlsplit('tcp://'+str(config.get('rtmpsAddress',':1936')))
+    rtmps=f'rtmps://{HOST}:{secure_address.port or 1936}/{path}?{query}'
+    rtmp=rtmps if config.get('rtmpEncryption')=='strict' else f'rtmp://{HOST}:{RTMP_PORT}/{path}?{query}'
     return {'key':key,'label':source['label'],'protocol':source['protocol'],
-            'rtmp':f'rtmp://{HOST}:{RTMP_PORT}/{path}?{query}',
+            'rtmp':rtmp,'rtmps':rtmps if config.get('rtmpEncryption','no')!='no' else '',
             'srt':f'srt://{HOST}:{SRT_PORT}?{srt_query}','srt_server':f'srt://{HOST}:{SRT_PORT}',
+            'srt_read':f'srt://{HOST}:{SRT_PORT}?{read_id}',
+            'webrtc':PUBLIC+'/webrtc/source/'+key+'/publish/',
+            'moq':f'https://{HOST}:{MOQ_PORT}/{path}',
             'stream_id':stream_id,'username':name,'password':secret,'srt_mode':'caller','srt_latency_ms':1000}
 
 
@@ -665,7 +817,7 @@ def source_ingest(user, key):
 def ingest(user):
     first, second = source_ingest(user,'source1'),source_ingest(user,'source2')
     return jsonify(**{key:second[key] for key in ('srt','srt_server','stream_id','srt_mode','srt_latency_ms','username','password')},
-                   rtmp=first['rtmp'],sources=[source_ingest(user,row['key']) for row in MODEL.sources(user)])
+                   rtmp=first['rtmp'],sources=[source_ingest(user,row['key']) for row in MODEL.sources(user) if SERVICES.source_allowed(row)])
 
 
 @app.get('/api/ingest/<key>')
@@ -714,12 +866,35 @@ def validate_output(value):
     return value
 
 
+def validate_public_http(value):
+    if not isinstance(value,str) or len(value)>2048 or any(char.isspace() for char in value):
+        raise Error('Ungültige HTTPS-Adresse.')
+    try:
+        parsed=urllib.parse.urlsplit(value)
+        if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password or parsed.fragment:
+            raise ValueError()
+        addresses=resolve_host_ips(parsed.hostname,parsed.port or 443)
+        if not addresses or any(blocked_target_ip(address,ingest_ips()) for address in addresses):
+            raise ValueError()
+    except (ValueError,OSError):
+        raise Error('Bitte eine öffentliche HTTPS-Adresse ohne eingebettete Zugangsdaten verwenden.') from None
+    return value
+
+
+def public_https(url, **kwargs):
+    from outbound_http import open_public_https
+    validate_public_http(url)
+    return open_public_https(url, resolver=resolve_host_ips, blocked=ingest_ips(), **kwargs)
+
+
 def forward(user, enable, kind=None):
     with LOCK:
+        if enable and kind is not None:
+            SERVICES.require_output(kind)
         config = yaml.safe_load(CONFIG.read_text())
         live = paths(user)[2]
         before = configured_forwards(user, config)
-        chosen = [d for d in destinations(user, selected=kind is None) if kind is None or d['kind'] == kind] if enable else []
+        chosen = [d for d in destinations(user, selected=kind is None) if (kind is None or d['kind'] == kind) and SERVICES.output_allowed(d['kind'])] if enable else []
         if enable and (not chosen or any(not row['endpoint'] for row in chosen)):
             raise Error('Bitte mindestens einen eingerichteten Ausgang auswählen.')
         if any(not MODEL.route(user,row['kind']) for row in chosen):
@@ -727,7 +902,7 @@ def forward(user, enable, kind=None):
         endpoints = {d['kind']: validate_output(decrypt(d['endpoint'])) for d in chosen}
         if kind is not None:
             endpoints = {**{k: before[output_path(user, k)][0]['dest'] for k in output_kinds(user)
-                            if k != kind and before[output_path(user, k)]}, **endpoints}
+                            if k != kind and SERVICES.output_allowed(k) and before[output_path(user, k)]}, **endpoints}
         if len(endpoints) != len(set(endpoints.values())):
             raise Error('Dasselbe Streamingziel ist mehrfach ausgewählt.')
         changes = {live: {'forward': [], 'alwaysAvailable': bool(user['active']), 'alwaysAvailableFile': '', 'alwaysAvailableTracks': STANDBY_TRACKS}}
@@ -790,8 +965,11 @@ def select_outputs(user):
         configured = {d['kind'] for d in destinations(user) if d['endpoint']}
         if any(kind not in configured for kind in kinds):
             raise Error('Bitte zuerst den Streamschlüssel für die gewünschte Plattform hinterlegen.')
-        connection.execute('UPDATE outputs SET selected=0 WHERE user_id=?', (user['id'],))
+        for destination in destinations(user):
+            if SERVICES.output_allowed(destination['kind']):
+                connection.execute('UPDATE outputs SET selected=0 WHERE user_id=? AND kind=?', (user['id'], destination['kind']))
         for kind in kinds:
+            SERVICES.require_output(kind)
             connection.execute('UPDATE outputs SET selected=1 WHERE user_id=? AND kind=?', (user['id'], kind))
     return jsonify(ok=True)
 
@@ -820,6 +998,7 @@ def save_output(user):
     require_stopped(user)
     body = request.get_json() or {}
     kind = body.get('kind', 'twitch')
+    SERVICES.require_output(str(kind))
     if kind == 'twitch':
         key = str(body.get('key', '')).strip()
         if not re.fullmatch(r'[A-Za-z0-9_-]{15,256}', key):
@@ -864,6 +1043,7 @@ def remove_twitch_auth(uid, revoke=True):
 
 
 def validated_twitch_token(uid, force=False):
+    SERVICES.require('twitch')
     with OAUTH_LOCK:
         found = rows('SELECT * FROM twitch_auth WHERE user_id=?', (uid,))
         if not found:
@@ -1103,7 +1283,7 @@ def upload(user):
 def admin_status(user):
     if not user['admin']:
         return jsonify(error='Keine Berechtigung.'), 403
-    return jsonify(current_user_id=user['id'],users=rows('SELECT id,username,admin,active FROM users ORDER BY id'),
+    return jsonify(current_user_id=user['id'],users=rows('SELECT id,username,admin,active,role,chat_owner_id FROM users ORDER BY id'),
                    client_id=setting('client_id'), secret_set=bool(setting('client_secret')),
                    callback=PUBLIC + '/oauth/twitch/callback', public_url=PUBLIC, google_client_id=setting('google_client_id'), google_secret_set=bool(setting('google_client_secret')), google_callback=PUBLIC + '/oauth/youtube/callback')
 
@@ -1172,12 +1352,21 @@ def recordings(user):
 @app.post('/api/recordings/start')
 @login_required
 def record_start(user):
+    source = str((request.get_json() or {}).get('source', 'live'))
+    return jsonify(ok=True, id=start_recording(user, source))
+
+
+def start_recording(user, source='live'):
     with LOCK:
+        SERVICES.require('recording')
+        if source.startswith('source'):
+            item = MODEL.source(user, source)
+            if not SERVICES.source_allowed(item):
+                raise Error('Diese Quelle wurde durch die Administration gesperrt.', http_status=403)
         if recording_status(user)['active']:
             raise Error('Es läuft bereits eine Aufnahme oder deren Abschluss.')
         if shutil.disk_usage(DATA).free < 500 * 1048576:
             raise Error('Zu wenig Speicher. Für den Start müssen mindestens 500 MB frei sein.')
-        source = str((request.get_json() or {}).get('source', 'live'))
         actual = MODEL.record_path(user,source)
         if source == 'source1' and user['replay_recording_id']:
             actual = user['prefix'] + 'replay'
@@ -1203,7 +1392,7 @@ def record_start(user):
         except OSError:
             write("UPDATE recordings SET status='error',message='Aufnahmedienst konnte nicht starten.' WHERE id=?", (rid,))
             raise Error('Aufnahme konnte nicht gestartet werden.') from None
-    return jsonify(ok=True, id=rid)
+    return rid
 
 
 @app.post('/api/recordings/stop')
@@ -1266,6 +1455,7 @@ def renewal_period(user):
 
 
 def begin_renewal(user):
+    SERVICES.require('automation')
     with LOCK:
         user = rows('SELECT * FROM users WHERE id=?', (user['id'],))[0]
         config = yaml.safe_load(CONFIG.read_text())
@@ -1328,6 +1518,12 @@ def select_video(user, vid):
         if not Path(path).is_file():
             raise Error('Diese Videodatei ist nicht mehr vorhanden.')
         write('UPDATE users SET selected_video_id=?,offline=? WHERE id=?', (vid, path, user['id']))
+        if MODEL.policy(user)['native_standby']:
+            try:
+                reconcile()
+            except Exception:
+                write('UPDATE users SET selected_video_id=?,offline=? WHERE id=?', (user['selected_video_id'],user['offline'],user['id']))
+                raise
     return jsonify(ok=True)
 
 
@@ -1644,6 +1840,12 @@ def program_asset(user,pid,asset):
     return hls_asset(user,MODEL.program(user,pid)['path'],asset)
 
 
+def path_has_audio(path):
+    audio = {'opus','flac','vorbis','mpeg4audio','mpeg4audiolatm','mpeg12audio','ac3','g711','lpcm','speex','g726','g722'}
+    tracks=path.get('tracks2') or path.get('tracks') or []
+    return not tracks or any(re.sub(r'[^a-z0-9]','',str(track.get('codec','') if isinstance(track,dict) else track).lower()) in audio for track in tracks)
+
+
 class Engine:
     def __init__(self):
         self.snapshot = {}
@@ -1655,6 +1857,8 @@ class Engine:
         self.ingest_samples = {}
         self.recorders = {}
         self.replays = {}
+        self.source_probes = {}
+        self.source_probe_retry = {}
         self.running = True
         self.thread = None
 
@@ -1675,6 +1879,43 @@ class Engine:
                     store.pop(key, None)
         if 'CHAT' in globals() and CHAT is not None:
             CHAT.prune(active)
+
+    def stop_source_probe(self, key):
+        process = self.source_probes.pop(key, None)
+        if process and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill();process.wait()
+
+    def demand_sources(self, user, catalog, all_paths, config, now):
+        wanted = set()
+        recordings = {row['source'] for row in rows("SELECT source FROM recordings WHERE user_id=? AND status='recording'", (user['id'],))}
+        for program in MODEL.programs(user):
+            path = program['path']
+            demand = bool(all_paths.get(path, {}).get('readers')) or config['paths'].get(path, {}).get('record')
+            demand = demand or ('live' if program['id']=='main' else program['id']) in recordings
+            demand = demand or any(config['paths'].get(output_path(user, kind), {}).get('forward') for kind in program['targets'])
+            if demand:
+                wanted.update(program['sources'])
+        for source in catalog:
+            key = (user['id'], source['key'])
+            if config['paths'].get(user['prefix']+source['key'],{}).get('record'):
+                wanted.add(source['key'])
+            needed = SERVICES.source_allowed(source) and source['enabled'] and source.get('source_on_demand') and source['protocol'] in ('rtsp','rtsps','proxy','mpegts','rtp') and source['key'] in wanted
+            if not needed:
+                self.stop_source_probe(key)
+                continue
+            process = self.source_probes.get(key)
+            if process and process.poll() is not None:
+                self.source_probe_retry[key] = now + MODEL.policy(user)['retry_seconds']
+                self.stop_source_probe(key)
+            if key not in self.source_probes and now >= self.source_probe_retry.get(key, 0):
+                self.source_probes[key] = subprocess.Popen(['ffmpeg','-hide_banner','-loglevel','error','-nostdin',
+                    '-rtsp_transport','tcp','-timeout','15000000','-i',RTSP+user['prefix']+source['key'],
+                    '-map','0:v:0?','-map','0:a:0?','-c','copy','-f','null','-'],
+                    stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
 
     def stop_record(self, uid, reason):
         with LOCK:
@@ -1747,6 +1988,8 @@ class Engine:
 
     def manage_renewal(self, user, state):
         with LOCK:
+            if not SERVICES.enabled('automation'):
+                return False
             user = rows('SELECT * FROM users WHERE id=?', (user['id'],))[0]
             requested = renewal_forwards(user)
             if not requested:
@@ -1770,6 +2013,28 @@ class Engine:
 
     def stop_relay(self, uid):
         previous = self.relays.pop(uid, None)
+        job = self.browser_jobs.pop(uid, None)
+        if job and (previous or job.get('process')):
+            process = previous[1] if previous else job['process']
+            identity = pwd.getpwnam(BROWSER_USER)
+            identity_options = {} if identity.pw_uid == os.geteuid() else {
+                'user':identity.pw_uid,'group':identity.pw_gid,'extra_groups':[]}
+            # Renderers have their own process group. Signal it as the renderer
+            # identity, so the UI needs no CAP_KILL or access to foreign /proc.
+            def signal_renderer(value):
+                subprocess.run([sys.executable, '-c',
+                    'import os,signal,sys;\ntry: os.killpg(int(sys.argv[1]),int(sys.argv[2]))\nexcept ProcessLookupError: pass',
+                    str(process.pid), str(value)], check=False, timeout=5, **identity_options)
+            signal_renderer(signal.SIGTERM)
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                signal_renderer(signal.SIGKILL)
+                process.wait(timeout=3)
+            subprocess.run([sys.executable, '-c', 'import shutil,sys;shutil.rmtree(sys.argv[1],ignore_errors=True)',
+                            str(job['directory'])], check=False, timeout=10, **identity_options)
+            shutil.rmtree(job['directory'], ignore_errors=True)
+            return
         if previous and previous[1].poll() is None:
             previous[1].terminate()
             try:
@@ -1777,7 +2042,6 @@ class Engine:
             except subprocess.TimeoutExpired:
                 previous[1].kill()
                 previous[1].wait()
-        job = self.browser_jobs.pop(uid, None)
         if job:
             # Each job has a private HOME. Stopping one renderer must not kill
             # another user's browser after the configured capacity is increased.
@@ -1790,26 +2054,30 @@ class Engine:
                     pass
             shutil.rmtree(job['directory'], ignore_errors=True)
 
-    def start_browser(self, user, url, destination, key=None):
+    def start_browser(self, user, url, destination, key=None, source_path=None, has_audio=True):
+        SERVICES.require('browser_overlays')
         key = user['id'] if key is None else key
         identity = pwd.getpwnam(BROWSER_USER)
         root = BROWSER_ROOT
         directory = root / secrets.token_hex(12)
-        directory.mkdir(mode=0o700)
-        os.chown(directory, identity.pw_uid, identity.pw_gid)
-        source = Path(user['offline'])
-        stat = source.stat()
-        if shutil.disk_usage(root).free < stat.st_size + 128 * 1024 * 1024:
+        directory.mkdir(mode=0o770)
+        os.chown(directory, -1, identity.pw_gid)
+        directory.chmod(0o770)
+        source = Path(user['offline']) if source_path is None else None
+        stat = source.stat() if source else None
+        if shutil.disk_usage(root).free < (stat.st_size if stat else 0) + 128 * 1024 * 1024:
             shutil.rmtree(directory, ignore_errors=True)
             raise Error('Zu wenig Speicher für die Browserquelle.')
         link = directory / 'clip.mp4'
         job = {'directory': directory, 'source': source, 'uid': identity.pw_uid}
         self.browser_jobs[key] = job
         try:
-            shutil.copyfile(source, link)
-            os.chown(link, identity.pw_uid, identity.pw_gid)
-            os.chmod(link, 0o600)
-            environment = {**os.environ, 'HOME': str(directory), 'XDG_CACHE_HOME': str(directory / 'cache')}
+            if source:
+                shutil.copyfile(source, link)
+                os.chown(link, -1, identity.pw_gid)
+                os.chmod(link, 0o640)
+            environment = {'PATH':os.environ.get('PATH','/usr/bin:/bin'), 'LANG':'C.UTF-8',
+                           'HOME':str(directory), 'XDG_CACHE_HOME':str(directory/'cache')}
             blocked = sorted(ingest_ips())
             pin_rules = []
             demo = is_overlay_demo(url)
@@ -1824,10 +2092,14 @@ class Engine:
                 pin_rules = ['MAP ' + parsed.hostname + ' ' + pinned[0]]
                 if parsed.hostname.startswith('www.'):
                     pin_rules.append('MAP ' + parsed.hostname[4:] + ' ' + pinned[0])
+            identity_options = {} if identity.pw_uid == os.geteuid() else {
+                'user':identity.pw_uid, 'group':identity.pw_gid, 'extra_groups':[]}
             process = subprocess.Popen([sys.executable, str(Path(__file__).with_name('browser_overlay.py'))],
                                        stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                       user=identity.pw_uid, group=identity.pw_gid, extra_groups=[], env=environment)
-            data = {'clip': str(link), 'url': url, 'destination': destination,
+                                       env=environment, start_new_session=True, **identity_options)
+            job['process'] = process
+            data = {'clip': RTSP + source_path if source_path else str(link), 'live_input': bool(source_path),'has_audio':has_audio,
+                    'url': url, 'destination': destination,
                     'ingest_ips': blocked, 'fps': browser_fps(), 'host_resolver_rules': ', '.join(pin_rules)}
             if demo:
                 base = Path(__file__).parent
@@ -1842,10 +2114,10 @@ class Engine:
             self.stop_relay(key)
             raise
 
-    def program_tick(self,user,program,healthy,all_paths,config,enabled,now,browser_url):
+    def program_tick(self,user,program,healthy,all_paths,config,enabled,now,browser_url,policy):
         key = relay_key(user,program['id'])
         healthy = [name for name in healthy if now >= self.retry.get((key,name),0)]
-        offline_key = ('@browser:' if browser_url else '@offline:')+user['offline']
+        offline_key = '@offline:'+user['offline']
         browser_status = 'off'
         other_browser = bool(browser_url) and key not in self.browser_jobs and len(self.browser_jobs)>=browser_capacity()
         if browser_url:
@@ -1859,51 +2131,72 @@ class Engine:
         offline_allowed = bool(program['sources']) and (enabled or local_demand)
         if user['replay_recording_id'] and 'source1' in program['sources']:
             offline_allowed = False
-        desired = healthy[0] if healthy else offline_key if offline_allowed and not other_browser and now>=self.retry.get((key,offline_key),0) else None
+        def choose():
+            source = next((name for name in healthy if now>=self.retry.get((key,name),0)),None)
+            if source is None and offline_allowed and now>=self.retry.get((key,offline_key),0):
+                source=offline_key
+            if source and browser_url and not other_browser and now>=self.retry.get((key,'@browser:'+source),0):
+                return '@browser:'+source
+            return source
+        desired = choose()
         previous = self.relays.get(key)
         if previous and previous[1].poll() is not None:
-            self.retry[(key,previous[0])] = now+10
+            self.retry[(key,previous[0])] = now+policy['retry_seconds']
             self.stop_relay(key);previous=None
-            desired = next((name for name in healthy if now>=self.retry.get((key,name),0)),None)
+            desired = choose()
         if (previous[0] if previous else None)!=desired:
             self.stop_relay(key)
             if desired:
                 if desired.startswith('@browser:'):
                     try:
-                        self.relays[key] = (desired,self.start_browser(user,browser_url,RTSP+program['path'],key=key))
+                        source_path = desired[len('@browser:'):]
+                        live_source = source_path if not source_path.startswith(('@offline:', '/')) else None
+                        self.relays[key] = (desired,self.start_browser(user,browser_url,RTSP+program['path'],
+                                                                      key=key,source_path=live_source,
+                                                                      has_audio=not live_source or path_has_audio(all_paths.get(live_source,{}))))
                     except Exception:
-                        self.retry[(key,desired)] = now+30;browser_status='error'
+                        self.retry[(key,desired)] = now+max(30,policy['retry_seconds']);browser_status='error'
                 else:
                     input_args = ['-re','-stream_loop','-1','-i',user['offline']] if desired.startswith('@offline:') else [
                         '-rtsp_transport','tcp','-timeout','15000000','-analyzeduration','1000000','-probesize','1000000','-i',RTSP+desired]
+                    has_audio=desired.startswith('@offline:') or path_has_audio(all_paths.get(desired,{}))
+                    if not has_audio:
+                        input_args += ['-f','lavfi','-i','anullsrc=r=48000:cl=stereo']
                     command = ['ffmpeg','-hide_banner','-nostdin','-loglevel','error']+input_args+[
-                        '-map','0:v:0','-map','0:a:0?',
+                        '-map','0:v:0','-map','0:a:0?' if has_audio else '1:a:0',
                         '-vf','scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30',
                         '-c:v','libx264','-preset','veryfast','-tune','zerolatency','-profile:v','baseline',
                         '-pix_fmt','yuv420p','-bf','0','-g','30','-threads','2','-b:v','4500k','-maxrate','4500k','-bufsize','9000k',
                         '-c:a','aac','-b:a','160k','-ar','48000','-ac','2','-af','aresample=async=1:first_pts=0',
-                        '-max_interleave_delta','1000000','-flush_packets','1','-f','rtsp','-rtsp_transport','tcp',RTSP+program['path']]
+                        '-shortest','-max_interleave_delta','1000000','-flush_packets','1','-f','rtsp','-rtsp_transport','tcp',RTSP+program['path']]
                     suffix = '' if program['id']=='main' else '-'+program['id']
                     with (DATA/f"relay-{user['id']}{suffix}.log").open('wb') as log:
                         self.relays[key] = (desired,subprocess.Popen(command,stdout=subprocess.DEVNULL,stderr=log))
         current = self.relays.get(key)
         actual = current[0] if current and live.get('online') else None
-        selected_source = next((source for source in program['sources'] if actual == user['prefix']+('replay' if source=='source1' and user['replay_recording_id'] else source)),None)
-        offline_playing = bool(actual and actual.startswith(('@offline:','@browser:')))
-        if browser_url and not healthy:
-            if actual and actual.startswith('@browser:'):
-                browser_status = 'live'
-            elif now<self.retry.get((key,offline_key),0):
-                browser_status = 'error'
+        actual_source = actual[len('@browser:'):] if actual and actual.startswith('@browser:') else actual
+        selected_source = next((source for source in program['sources'] if actual_source == user['prefix']+('replay' if source=='source1' and user['replay_recording_id'] else source)),None)
+        offline_playing = bool(actual_source and actual_source.startswith('@offline:'))
+        if browser_url and actual and actual.startswith('@browser:'):
+            browser_status = 'live'
+        elif browser_url and not healthy and now<self.retry.get((key,offline_key),0):
+            browser_status = 'error'
         return {'id':program['id'],'selected_source':selected_source,'offline_playing':offline_playing,
                 'available':bool(live.get('available')),'browser_status':browser_status}
 
     def tick(self):
+        with LOCK:
+            SERVICES.enforce_local()
+            SERVICES.sync_runtime()
         now = time.monotonic()
         all_paths = {p['name']: p for p in list_items(mtx,'paths/list')}
-        users = rows('SELECT * FROM users WHERE active=1')
+        users = rows("SELECT * FROM users WHERE active=1 AND role!='moderator'")
         config = yaml.safe_load(CONFIG.read_text())
         active_ids = {u['id'] for u in users}
+        active_probe_keys = {(user['id'], source['key']) for user in users for source in MODEL.sources(user)}
+        for key in list(self.source_probes):
+            if key not in active_probe_keys:
+                self.stop_source_probe(key)
         self.prune_caches(active_ids)
         FEATURES.program_preview.monitor(users, all_paths)
         for uid, (rid, process) in list(self.recorders.items()):
@@ -1924,6 +2217,8 @@ class Engine:
             names = paths(user)
             replay_state = self.manage_replay(user)
             catalog = MODEL.sources(user)
+            policy = MODEL.policy(user)
+            self.demand_sources(user,catalog,all_paths,config,now)
             inputs = input_paths(user)
             if user['replay_recording_id']:
                 inputs[0] = user['prefix'] + 'replay'
@@ -1942,12 +2237,12 @@ class Engine:
                     old['change'] = now
                     if old['since'] is None:
                         old['since'] = now
-                online = bool(path.get('online'))
-                stalled = now - old['change'] >= 5
+                online = bool(path.get('online')) and bool(path.get('available',path.get('ready',True)))
+                stalled = now - old['change'] >= policy['stall_seconds']
                 if not online or stalled:
                     old['since'] = None
                 manual_replay = bool(index == 0 and user['replay_recording_id'])
-                if catalog[index]['enabled'] and online and old['since'] is not None and (manual_replay or now - old['since'] >= 3):
+                if SERVICES.source_allowed(catalog[index]) and catalog[index]['enabled'] and online and old['since'] is not None and (manual_replay or now - old['since'] >= policy['healthy_seconds']):
                     healthy_by_source[catalog[index]['key']] = name
                 old.update(count=count, sample=now)
                 self.health[key] = old
@@ -1980,7 +2275,7 @@ class Engine:
                         if output_path(user, kind) == name:
                             output_states[kind] = 'renewing'
             selected_video = rows('SELECT browser_url FROM videos WHERE id=? AND user_id=?',(user['selected_video_id'],uid))
-            browser_url = decrypt(selected_video[0]['browser_url']) if selected_video else ''
+            browser_url = decrypt(selected_video[0]['browser_url']) if selected_video and SERVICES.enabled('browser_overlays') else ''
             program_states = []
             programs = MODEL.programs(user)
             active_keys = {relay_key(user,program['id']) for program in programs}
@@ -1990,7 +2285,9 @@ class Engine:
             for program in programs:
                 eligible = [healthy_by_source[source] for source in program['sources'] if source in healthy_by_source]
                 active_output = any(desired_forwards.get(output_path(user,kind)) for kind in program['targets'])
-                program_states.append(self.program_tick(user,program,eligible,all_paths,config,active_output,now,browser_url))
+                program_states.append(self.program_tick(user,program,eligible,all_paths,config,active_output,now,browser_url,policy))
+            FEATURES.automation.observe(user,source_info,program_states)
+            FEATURES.notifications.observe(user,source_info,output_states,shutil.disk_usage(DATA).free)
             main = next(program for program in program_states if program['id']=='main')
             selected = next((i+1 for i,row in enumerate(catalog) if row['key']==main['selected_source']),0)
             offline_playing,browser_status = main['offline_playing'],main['browser_status']
@@ -2017,6 +2314,7 @@ class Engine:
                 self.snapshot[uid] = {'ok': True, 'receive_mbps': round(incoming, 3), 'send_mbps': round(outgoing, 3), 'output_states': output_states, 'sources': source_info, 'selected': selected,
                                       'available': bool(live.get('available')), 'enabled': enabled, 'state': state, 'offline_playing': offline_playing,
                                       'browser_status': browser_status, 'replay_state': replay_state,'programs':program_states}
+        FEATURES.automation.tick()
         READY.set()
 
     def run(self):
@@ -2040,12 +2338,16 @@ class Engine:
         for uid in list(self.replays):
             self.stop_replay(uid)
         FEATURES.program_preview.close()
+        for key in list(self.source_probes):
+            self.stop_source_probe(key)
 
 
 ENGINE = Engine()
 from routing_model import RoutingModel, job_key as relay_key, owner as relay_owner
 MODEL = RoutingModel(sys.modules[__name__])
 initialize()
+from service_policy import ServicePolicy
+SERVICES = ServicePolicy(sys.modules[__name__])
 from integrations import install_integrations
 CHAT = install_integrations(sys.modules[__name__])
 from media_features import MediaFeatures

@@ -1,0 +1,67 @@
+services:
+  config-init:
+    image: alpine:3.22
+    volumes:
+      - mediamtx-config:/config
+      - ./deploy/mediamtx.yml:/seed/mediamtx.yml:ro
+    command: sh -c 'set -e; test -f /config/mediamtx.yml || cp /seed/mediamtx.yml /config/mediamtx.yml; chown 10001:10001 /config /config/mediamtx.yml; chmod 750 /config; chmod 640 /config/mediamtx.yml'
+    restart: "no"
+
+  mediamtx:
+    image: bluenviron/mediamtx:1.21.3
+    user: "10001:10001"
+    depends_on:
+      config-init:
+        condition: service_completed_successfully
+    command: /config/mediamtx.yml
+    volumes:
+      - mediamtx-config:/config
+      - native-recordings:/recordings
+    ports:
+      - "1935:1935"
+      - "8554:8554"
+      - "8890:8890/udp"
+    restart: unless-stopped
+
+  streamdesk:
+    build: .
+    depends_on:
+      mediamtx:
+        condition: service_started
+    environment:
+      STREAMDESK_PUBLIC: ${STREAMDESK_PUBLIC:-http://localhost:8080}
+      STREAMDESK_INGEST: ${STREAMDESK_INGEST:-localhost}
+      STREAMDESK_DATA: /data
+      STREAMDESK_NATIVE_ROOT: /recordings
+      STREAMDESK_BROWSER_ROOT: /browser
+      STREAMDESK_BROWSER_USER: streamdesk
+      STREAMDESK_DEFAULT_CLIP: /data/standby.mp4
+      STREAMDESK_NAMESPACE: streamdesk
+      STREAMDESK_BIND: 0.0.0.0:8080
+      STREAMDESK_ADMIN_USER: ${STREAMDESK_ADMIN_USER:-admin}
+      STREAMDESK_ADMIN_PASSWORD: ${STREAMDESK_ADMIN_PASSWORD:?set STREAMDESK_ADMIN_PASSWORD}
+      MEDIAMTX_CONFIG: /config/mediamtx.yml
+      MEDIAMTX_API: http://mediamtx:9997/v3/
+      MEDIAMTX_METRICS: http://mediamtx:9998/metrics
+      MEDIAMTX_HLS: http://mediamtx:8888/
+      MEDIAMTX_RTSP: rtsp://mediamtx:8554/
+    volumes:
+      - streamdesk-data:/data
+      - browser-runtime:/browser
+      - mediamtx-config:/config
+      - native-recordings:/recordings
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/healthz',timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  streamdesk-data:
+  browser-runtime:
+  mediamtx-config:
+  native-recordings:

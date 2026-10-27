@@ -1,19 +1,25 @@
 <!doctype html>
-<html lang="de" data-theme="{{user.theme}}" data-expert="{{'true' if expert else 'false'}}">
+<html lang="{{language}}" data-theme="{{user.theme}}" data-expert="{{'true' if expert else 'false'}}">
 
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="csrf-token" content="{{csrf}}">
     <meta name="public-url" content="{{public}}">
+    <meta name="streamdesk-services" content="{{services|tojson|forceescape}}">
     <title>Dashboard · MediaMTX - StreamDesk</title>
-    <link rel="stylesheet" href="/static/style.css?v=rc6">
-    <link rel="stylesheet" href="/static/features.css?v=rc6">
-    <script src="/static/chat.js?v=multi1" defer></script>
-    <script src="/static/app.js?v=rc6" defer></script>
-    <script src="/static/features.js?v=rc6" defer></script>
-    <script src="/static/expansion.js?v=rc6" defer></script>
-    <script src="/static/routing.js?v=rc6" defer></script>
+    <link rel="stylesheet" href="/static/style.css?v={{app_version}}&amp;b={{asset_build}}">
+    <link rel="stylesheet" href="/static/features.css?v={{app_version}}&amp;b={{asset_build}}">
+    <script src="/static/chat.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
+    <script src="/static/services.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
+    <script src="/static/app.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
+    <script src="/static/features.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
+    <script src="/static/expansion.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
+    <script src="/static/routing.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
+    <script src="/static/automation.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
+    <script src="/static/i18n.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
+    <script src="/static/build-d.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
+    <script src="/static/discord.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
 </head>
 
 <body class="workspace">
@@ -26,11 +32,11 @@
                     <rect x="14" y="3" width="7" height="7" rx="1.5" />
                     <rect x="3" y="14" width="7" height="7" rx="1.5" />
                     <rect x="14" y="14" width="7" height="7" rx="1.5" />
-                </svg><span>Dashboard</span></a><a class="menu-link" href="#sources"><svg viewBox="0 0 24 24"
+                </svg><span data-i18n="dashboard">Dashboard</span></a><a class="menu-link" href="#sources"><svg viewBox="0 0 24 24"
                     fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
                     <rect x="3" y="5" width="18" height="12" rx="2" />
                     <path d="M8 21h8M12 17v4" />
-                </svg><span>Quellen</span></a>
+                </svg><span data-i18n="sources">Quellen</span></a>
             <div class="menu-label">MEDIEN</div><a class="menu-link" href="#videos"><svg viewBox="0 0 24 24" fill="none"
                     stroke="currentColor" stroke-width="1.6" aria-hidden="true">
                     <rect x="3" y="4" width="18" height="16" rx="2" />
@@ -63,7 +69,7 @@
         <header class="workspace-header">
             <div class="breadcrumb">Arbeitsplatz <span>/</span> <strong id="breadcrumb-title">Dashboard</strong></div>
             <div class="header-account"><span class="connection" id="connection">● Verbinde …</span><a class="expert-pill" href="#expert" data-expert-only {% if not expert %}hidden{% endif %}>Experte</a><span
-                    class="user-avatar" aria-hidden="true">{{user.username[0]|upper}}</span><a class="username" href="#account">{{user.username}}</a><button id="logout" class="ghost">Abmelden</button></div>
+                    class="user-avatar" aria-hidden="true">{{user.username[0]|upper}}</span><a class="username" href="#account">{{user.username}}</a><button id="logout" class="ghost" data-i18n="logout">Abmelden</button></div>
         </header>
         <main id="workspace-main" tabindex="-1">
             <div class="heading">
@@ -75,6 +81,7 @@
             </div>
             <div id="alert" role="alert" hidden></div>
             <div id="toast" role="status" hidden></div>
+            <section id="service-blocked" class="panel" hidden><h2>Durch die Administration gesperrt</h2><p>Dieser Dienst ist für alle Benutzer gesperrt. Deine gespeicherten Einstellungen bleiben erhalten.</p></section>
             <section class="app-view" data-view="dashboard" aria-label="Dashboard">
                 <div class="metrics-grid">
                     <article class="metric-card">
@@ -138,7 +145,7 @@
                                 <p>Vorschau deines fertigen Streams</p>
                             </div><iframe allow="autoplay; fullscreen" hidden="" title="Ausgangsvorschau"></iframe>
                         </div>
-                        <div class="program-link-row"><label>Link zur ausgewählten Programmvorschau<input id="program-link" type="text" readonly></label><button id="program-link-copy" class="ghost" type="button">Link kopieren</button><a id="program-link-open" target="_blank" rel="noopener">Vorschau öffnen ↗</a><a id="program-webrtc-open" target="_blank" rel="noopener" data-expert-only {% if not expert %}hidden{% endif %}>WebRTC mit Ton ↗</a><p class="small muted">Privater Vorschau-Link · Anmeldung erforderlich.</p></div>
+                        <div class="program-link-row"><label>Link zur ausgewählten Programmvorschau<input id="program-link" type="text" readonly></label><button id="program-link-copy" class="ghost" type="button">Link kopieren</button><a id="program-link-open" target="_blank" rel="noopener">Vorschau öffnen ↗</a><a data-service="webrtc" id="program-webrtc-open" target="_blank" rel="noopener" data-expert-only {% if not expert %}hidden{% endif %}>WebRTC mit Ton ↗</a><p class="small muted">Privater Vorschau-Link · Anmeldung erforderlich.</p></div>
                         <div class="source-footer">
                             <p class="small muted" id="program-hint">Programm und Offline-Video sind auch ohne Streamingziel als Vorschau verfügbar.</p><button class="ghost preview-toggle"
                                 data-slot="3">Vorschau schließen</button>
@@ -159,10 +166,11 @@
                                         <option value="all">Twitch + YouTube</option>
                                         <option value="twitch">Nur Twitch</option>
                                         <option value="youtube">Nur YouTube</option>
+                                        <option value="discord">Nur Discord</option>
                                     </select>
                                 </div>
                                 <div class="chat-connections"><span class="chat-twitch-status">Twitch · Wird geprüft
-                                        …</span><span class="chat-youtube-status">YouTube · Wird geprüft …</span><a
+                                        …</span><span class="chat-youtube-status">YouTube · Wird geprüft …</span><span class="chat-discord-status">Discord · Wird geprüft …</span><a
                                         class="chat-connect-link" href="#settings">Konten verbinden / Chat freigeben
                                         →</a></div>
                                 <div class="chat-messages" role="log" aria-label="Chatnachrichten" aria-live="polite">
@@ -173,6 +181,7 @@
                                             <option value="both">Twitch und YouTube</option>
                                             <option value="twitch">Nur Twitch</option>
                                             <option value="youtube">Nur YouTube</option>
+                                            <option value="discord">Nur Discord</option>
                                         </select></label>
                                     <div class="chat-input-row"><textarea class="chat-message" maxlength="200" rows="2"
                                             placeholder="Deine Nachricht …" aria-label="Chatnachricht"
@@ -292,7 +301,7 @@
                                 <option value="live">Fertiger Ausgang</option>
                                 <option value="source1">Source 1 · OBS / Wiederholung</option>
                                 <option value="source2">Source 2 · Handy</option><option value="source3">Source 3</option><option value="pull">RTSP-Pull</option>
-                            </select></label><button class="primary" id="record-start">● Aufnahme
+                            </select></label><button class="primary" data-service="recording" id="record-start">● Aufnahme
                             starten</button><button class="danger" disabled="" id="record-stop">■ Aufnahme
                             beenden</button><button class="secondary" disabled="" id="replay-stop">Wiederholung
                             beenden</button></div>
@@ -311,10 +320,11 @@
                                     <option value="all">Twitch + YouTube</option>
                                     <option value="twitch">Nur Twitch</option>
                                     <option value="youtube">Nur YouTube</option>
+                                    <option value="discord">Nur Discord</option>
                                 </select>
                             </div>
                             <div class="chat-connections"><span class="chat-twitch-status">Twitch · Wird geprüft
-                                    …</span><span class="chat-youtube-status">YouTube · Wird geprüft …</span><a
+                                    …</span><span class="chat-youtube-status">YouTube · Wird geprüft …</span><span class="chat-discord-status">Discord · Wird geprüft …</span><a
                                     class="chat-connect-link" href="#settings">Konten verbinden / Chat freigeben →</a>
                             </div>
                             <div class="chat-messages" role="log" aria-label="Chatnachrichten" aria-live="polite">
@@ -325,6 +335,7 @@
                                         <option value="both">Twitch und YouTube</option>
                                         <option value="twitch">Nur Twitch</option>
                                         <option value="youtube">Nur YouTube</option>
+                                        <option value="discord">Nur Discord</option>
                                     </select></label>
                                 <div class="chat-input-row"><textarea class="chat-message" maxlength="200" rows="2"
                                         placeholder="Deine Nachricht …" aria-label="Chatnachricht"
@@ -364,72 +375,7 @@
                     </section>
                 </div>
             </section>
-            <section class="app-view" data-view="settings" aria-label="Einstellungen" hidden>
-                {% include 'features-settings.html' %}
-                <div class="settings-columns">
-                    <div>
-                        <article class="panel">
-                            <div class="section-heading">
-                                <h2>Streaming-Ausgänge</h2><span class="tag" id="output-kind">Twitch</span>
-                            </div>
-                            <form id="targets-form">
-                                <h3>Beim nächsten Stream senden an</h3>
-                                <p class="small muted">Die Konten bleiben verbunden. Du entscheidest unabhängig davon,
-                                    welche Plattformen den Stream erhalten.</p>
-                                <div class="target-presets"><button type="button" class="secondary"
-                                        data-target-preset="twitch">Nur Twitch</button><button type="button"
-                                        class="secondary" data-target-preset="youtube">Nur YouTube</button><button
-                                        type="button" class="secondary" data-target-preset="twitch,youtube">Twitch +
-                                        YouTube</button><button type="button" class="ghost" data-target-preset="">Kein
-                                        Ziel</button></div>
-                                <div id="target-list" class="target-list"></div><button class="primary" type="submit"
-                                    id="save-targets">Streaming-Auswahl speichern</button>
-                                <p id="target-summary" class="small" role="status"></p>
-                                <p class="small muted">Die gespeicherte Auswahl gilt beim nächsten Start. Ein laufender
-                                    Stream wird durch das Speichern nicht verändert.</p>
-                            </form>
-                            <div class="platform-connections"><a class="youtube-button" href="/oauth/youtube"
-                                    id="youtube-oauth">YouTube-Konto verbinden ↗</a>
-                                <p class="small muted" id="youtube-account">YouTube wird geprüft …</p>
-                                <div class="youtube-broadcast-controls"><button type="button" class="secondary"
-                                        id="yt-load">YouTube-Sendungen laden</button><label>Eigene
-                                        YouTube-Sendung<select id="yt-broadcasts">
-                                            <option value="">Bitte Sendungen laden</option>
-                                        </select></label>
-                                    <div class="video-actions"><button type="button" class="secondary"
-                                            id="yt-select-chat">Für Chat auswählen</button><button type="button"
-                                            class="secondary" id="yt-use-output">Streamschlüssel übernehmen</button>
-                                    </div>
-                                    <p class="small muted" id="yt-note">Sendungen im YouTube Studio anlegen. Es wird
-                                        keine Sendung automatisch veröffentlicht.</p>
-                                </div><button type="button" class="ghost" id="youtube-disconnect">YouTube-Konto
-                                    trennen</button><button type="button" class="ghost"
-                                    id="twitch-disconnect">Twitch-Konto trennen</button>
-                            </div>
-                            <p class="muted small" id="account">Noch kein Konto verbunden.</p><a class="twitch-button"
-                                href="/oauth/twitch" id="oauth">Mit Twitch verbinden ↗</a>
-                            <p class="small muted" id="oauth-note">Kontoverbindung wird geprüft.</p>
-                            <details>
-                                <summary>Streamschlüssel oder anderes Ziel verwenden</summary>
-                                <form id="output-form"><label>Ausgang<select id="kind" name="kind">
-                                            <option value="twitch">Twitch mit Streamschlüssel</option>
-                                            <option value="youtube">YouTube mit Streamschlüssel</option>
-                                            <option value="custom">Anderer Ausgang</option>
-                                        </select></label><label id="key-label">Streamschlüssel<input autocomplete="off"
-                                            name="key" placeholder="live_…" type="password" /></label><label hidden=""
-                                        id="url-label">Zieladresse<input autocomplete="off" name="url"
-                                            placeholder="rtmps://server/app#streamkey" type="text" /></label>
-                                    <p class="small muted">Bei RTMP den Streamschlüssel mit # von der Serveradresse
-                                        trennen.</p><button class="secondary" type="submit">Ausgang speichern</button>
-                                </form>
-                            </details><button class="ghost quiet" id="disconnect">Alle Streamschlüssel
-                                entfernen</button>
-                        </article>
-
-                    </div>
-
-                </div>
-            </section>
+            {% include 'settings-pages.html' %}
             {% include 'expert-pages.html' %}
             <section class="app-view" data-view="account" aria-label="Mein Konto" hidden>                        <section class="panel wide-details">
                             <h2>Mein Passwort ändern</h2>
@@ -442,8 +388,10 @@
                                         type="password" /></label><button class="secondary" type="submit">Passwort
                                     ändern</button>
                             </form>
-                        </section></section>
-            {% if user.admin %}<section class="app-view" data-view="administration" aria-label="Administration" hidden>
+                        </section>{% include 'build-d.html' %}</section>
+            {% if user.admin %}<nav id="admin-subnav" class="settings-subnav" aria-label="Administrations-Untermenü" hidden><a href="#administration">Benutzer &amp; Plattform-Apps</a><a href="#administration-services">Dienste &amp; Freigaben</a></nav>
+            {% include 'admin-services.html' %}
+            <section class="app-view" data-view="administration" aria-label="Administration" hidden>
                 <section class="panel wide-details" id="admin">
                     <h2>Administration </h2>
                     <div class="settings-grid inner">
@@ -457,7 +405,7 @@
                                         type="password" /></label><button class="secondary" type="submit">Benutzer
                                     anlegen</button>
                             </form>
-                            <p class="small muted">Jeder Benutzer erhält drei Publish-Quellen und optionalen RTSP-Pull und ein Offline-Video.
+                            <p class="small muted">Jeder Benutzer erhält Source 1, Source 2 und ein Offline-Video. Weitere Quellen können im Expertenmodus ergänzt werden.
                             </p>
                             <div id="user-list"></div>
                         </section>
@@ -494,7 +442,7 @@
                     </div>
                 </section>
             </section>{% endif %}
-            <footer><span>MediaMTX - StreamDesk · Deine persönliche Regie</span><span>Aufnahmen &amp; Wiederholungen starten nur
+            <footer><span>MediaMTX - StreamDesk · v{{app_version}} · Deine persönliche Regie</span><span>Aufnahmen &amp; Wiederholungen starten nur
                     manuell.</span></footer>
         </main>
     </div>

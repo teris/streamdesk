@@ -83,15 +83,22 @@ def main():
             if response is not None and response.status >= 400:
                 raise RuntimeError('Overlay could not be loaded')
             # The page stays alive: JavaScript, animation and alert WebSockets run in real time.
+            input_args = (['-rtsp_transport', 'tcp', '-timeout', '15000000', '-i', clip]
+                          if settings.get('live_input') else ['-re', '-stream_loop', '-1', '-i', clip])
+            has_audio=settings.get('has_audio',True)
+            silent_input=[] if has_audio else ['-f','lavfi','-i','anullsrc=r=48000:cl=stereo']
             command = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-nostdin',
-                       '-re', '-stream_loop', '-1', '-i', clip,
+                       *input_args,
                        '-thread_queue_size', '8', '-probesize', '32768', '-analyzeduration', '0',
                        '-f', 'image2pipe', '-framerate', str(fps), '-vcodec', 'png', '-i', 'pipe:0',
-                       '-filter_complex_threads', '1', '-filter_complex', '[0:v][1:v]overlay=0:0:shortest=1:format=auto,format=yuv420p[v]',
-                       '-map', '[v]', '-map', '0:a:0', '-c:v', 'libx264', '-preset', 'ultrafast', '-threads', '1',
+                       *silent_input,
+                       '-filter_complex_threads', '1', '-filter_complex',
+                       '[0:v]scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[base];[base][1:v]overlay=0:0:shortest=1:format=auto,format=yuv420p[v]',
+                       '-map', '[v]', '-map', '0:a:0' if has_audio else '2:a:0', '-c:v', 'libx264', '-preset', 'ultrafast', '-threads', '1',
                        '-tune', 'zerolatency', '-profile:v', 'baseline', '-bf', '0', '-pix_fmt', 'yuv420p',
                        '-b:v', '4500k', '-maxrate', '4500k', '-bufsize', '9000k', '-r', '30', '-g', '60',
-                       '-c:a', 'copy', '-f', 'rtsp', '-rtsp_transport', 'tcp', destination]
+                       '-c:a', 'aac', '-ar', '48000', '-ac', '2', '-b:a', '160k',
+                       '-shortest','-f', 'rtsp', '-rtsp_transport', 'tcp', destination]
             process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             while process.poll() is None:
                 start = time.monotonic()

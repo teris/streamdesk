@@ -1,12 +1,31 @@
 <section class="panel"><h2>Verbindungsstatus</h2><div id="protocol-status" role="status">MediaMTX-Status wird geladen …</div><button id="protocol-refresh" class="ghost" type="button">Status aktualisieren</button><p class="small muted">Der Status prüft die lokale MediaMTX-Konfiguration. Die Erreichbarkeit der UDP-Ports aus deinem Netz muss separat gegeben sein.</p></section>
 {% if user.admin %}<section class="panel" data-expert-only {% if not expert %}hidden{% endif %}>
     <h2>MediaMTX · WebRTC-Server</h2><p class="small muted">Globale Einstellung für alle Benutzer dieser MediaMTX-Instanz. Bestehende ICE-/TURN- und Listener-Einstellungen bleiben erhalten. Standardmäßig muss UDP 8189 zum Server weitergeleitet werden.</p>
-    <form id="webrtc-server-form"><fieldset id="webrtc-fields" disabled><legend>WebRTC-Server einrichten</legend><label class="feature-check"><input id="webrtc-enabled" type="checkbox"> WebRTC-Server aktivieren</label><label>Erreichbare Hostnamen / IP-Adressen, durch Komma getrennt<input id="webrtc-hosts" type="text" placeholder="ingest.example.com"></label><button id="webrtc-use-host" class="ghost" type="button">Ingest-Host übernehmen</button><button class="secondary" type="submit">WebRTC-Konfiguration speichern</button></fieldset></form>
+    <form data-service="webrtc" id="webrtc-server-form"><fieldset id="webrtc-fields" disabled><legend>WebRTC-Server einrichten</legend><label class="feature-check"><input id="webrtc-enabled" type="checkbox"> WebRTC-Server aktivieren</label><label>Erreichbare Hostnamen / IP-Adressen, durch Komma getrennt<input id="webrtc-hosts" type="text" placeholder="ingest.example.com"></label><button id="webrtc-use-host" class="ghost" type="button">Ingest-Host übernehmen</button><button class="secondary" type="submit">WebRTC-Konfiguration speichern</button></fieldset></form>
+</section>{% endif %}
+{% if user.admin %}<section class="panel" data-expert-only {% if not expert %}hidden{% endif %}>
+    <h2>Verschlüsselte Encoder-Eingänge</h2>
+    <p class="small muted">Zertifikat und Schlüssel werden mit <code>--enable-ingest-tls</code> installiert. „Optional“ erhält bestehende unverschlüsselte Encoder, „Erforderlich“ akzeptiert ausschließlich RTMPS bzw. RTSPS.</p>
+    <form id="protocol-encryption-form"><label>RTMP<select id="rtmp-encryption"><option value="no">Unverschlüsselt</option><option value="optional">Optional RTMP/RTMPS</option><option value="strict">RTMPS erforderlich</option></select></label><label>RTSP<select id="rtsp-encryption"><option value="no">Unverschlüsselt</option><option value="optional">Optional RTSP/RTSPS</option><option value="strict">RTSPS erforderlich</option></select></label><button class="secondary">Listener speichern</button></form>
+</section>
+<section class="panel" data-expert-only {% if not expert %}hidden{% endif %}>
+    <h2>Upload-Kapazität</h2>
+    <form id="bandwidth-form"><label>Verfügbare Upload-Bandbreite in Mbit/s (0 deaktiviert Warnung)<input id="bandwidth-limit" type="number" min="0" max="100000" step="0.1"></label><button class="secondary">Grenzwert speichern</button></form>
+</section>{% endif %}
+{% if user.admin %}<section class="panel" data-expert-only {% if not expert %}hidden{% endif %}>
+    <h2>MediaMTX-Authentifizierung</h2>
+    <p class="small muted">Persönliche Medienzugänge verwenden derzeit interne Authentifizierung. HTTP-Auth und JWT bleiben bis zur vollständigen Anbindung gesperrt, damit Vorschau, Aufnahmen und Benutzerrechte erhalten bleiben.</p>
+    <form id="auth-strategy-form"><label>Strategie<select id="auth-method"><option value="internal">Intern</option><option value="http" disabled>Externe HTTPS-Auth (noch nicht verfügbar)</option><option value="jwt" disabled>JWT / JWKS (noch nicht verfügbar)</option></select></label><label hidden>Auth- oder JWKS-URL<input id="auth-address" type="url"></label><label hidden>JWT-Claim-Schlüssel<input id="auth-claim" value="mediamtx_permissions"></label><button class="secondary">Interne Authentifizierung bestätigen</button></form>
+</section>{% endif %}
+{% if user.admin %}<section class="panel" data-expert-only {% if not expert %}hidden{% endif %}>
+    <h2>Spezialprotokolle</h2>
+    <form id="listener-form"><label class="feature-check"><input id="listener-moq" type="checkbox"> Media-over-QUIC (experimentell)</label><button class="secondary">Listener speichern</button></form>
+    <p class="small muted">MoQ bleibt standardmäßig aus. MPEG-TS und RTP werden in MediaMTX als UDP-Quelle je Pfad eingerichtet und benötigen keinen globalen Listener.</p>
 </section>{% endif %}
 <section class="panel" data-expert-only {% if not expert %}hidden{% endif %}>
     <h2>WebRTC · Kamera und Vorschau</h2>
     <p id="webrtc-availability" role="status">WebRTC-Status wird geladen …</p>
     <p class="small muted">Kamera-Publish benötigt HTTPS, Kamerafreigabe und H.264-Unterstützung. Für die Medienverbindung muss der konfigurierte WebRTC-Port am Server erreichbar sein.</p>
-    <div class="feature-actions"><a data-webrtc-link aria-disabled="true" tabindex="-1" class="secondary" href="/webrtc/1/publish/" target="_blank" rel="noopener">Kamera als Source 1</a><a data-webrtc-link aria-disabled="true" tabindex="-1" class="secondary" href="/webrtc/2/publish/" target="_blank" rel="noopener">Kamera als Source 2</a><a data-webrtc-link aria-disabled="true" tabindex="-1" class="ghost" href="/webrtc/1/play/" target="_blank" rel="noopener">Source 1 ansehen</a><a data-webrtc-link aria-disabled="true" tabindex="-1" class="ghost" href="/webrtc/2/play/" target="_blank" rel="noopener">Source 2 ansehen</a><a data-webrtc-link aria-disabled="true" tabindex="-1" class="ghost" href="/webrtc/3/play/" target="_blank" rel="noopener">Programm ansehen</a></div>
+    <div data-service="webrtc" class="feature-actions"><a data-webrtc-link aria-disabled="true" tabindex="-1" class="secondary" href="/webrtc/1/publish/" target="_blank" rel="noopener">Kamera als Source 1</a><a data-webrtc-link aria-disabled="true" tabindex="-1" class="secondary" href="/webrtc/2/publish/" target="_blank" rel="noopener">Kamera als Source 2</a><a data-webrtc-link aria-disabled="true" tabindex="-1" class="ghost" href="/webrtc/1/play/" target="_blank" rel="noopener">Source 1 ansehen</a><a data-webrtc-link aria-disabled="true" tabindex="-1" class="ghost" href="/webrtc/2/play/" target="_blank" rel="noopener">Source 2 ansehen</a><a data-webrtc-link aria-disabled="true" tabindex="-1" class="ghost" href="/webrtc/3/play/" target="_blank" rel="noopener">Programm ansehen</a></div>
     <p class="small muted">Die Programmvorschau liefert H.264 und Opus mit Ton, auch ohne Streamingziel. Bei direkten Source-Vorschauen hängt die Wiedergabe weiterhin von den Quellcodecs ab.</p>
 </section>

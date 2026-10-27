@@ -108,7 +108,7 @@ def main():
             stop(producers['source1']);stop(producers['source2'])
             until(lambda:selected('custom')=='source5')
             assert core.ENGINE.recorders[uid]==(rid,recorder) and recorder.poll() is None
-            value=pixel('custom');assert value[0]>180 and value[2]>180 and value[1]<60,value
+            until(lambda:(lambda value:value[0]>180 and value[2]>180 and value[1]<60)(pixel('custom')),timeout=30)
             assert selected(extra['twitch'])=='source3' and selected(extra['custom'])=='source4'
             print('PASS: six local outputs carry independently selected real signals; Source 1/2 fallback to Source 5 for provider A; provider B follows its own priorities; one program recording stays active.',flush=True)
             server=make_server('127.0.0.1',0,core.app,threaded=True);address='http://127.0.0.1:'+str(server.server_port);core.PUBLIC=address

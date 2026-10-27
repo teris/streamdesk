@@ -2,6 +2,8 @@
 const $ = (selector) => document.querySelector(selector);
 const csrf = $('meta[name="csrf-token"]').content;
 let busy = false;
+let redirecting = false;
+function redirectToLogin() { if (!redirecting) { redirecting=true;location.assign('/login'); } }
 let state;
 let failures = 0;
 let toastTimer;
@@ -28,7 +30,11 @@ const viewInfo = {
   videos:['MEDIENBIBLIOTHEK','Deine Offline-Videos.','Videos auswählen, hochladen und mit Overlays gestalten.','Offline-Videos'],
   recordings:['AUFNAHMEBIBLIOTHEK','Aufnehmen & Wiederholen.','Deine Aufnahmen speichern, herunterladen und manuell als Source 1 zuschalten.','Aufnahmen'],
   chat:['GEMEINSAMER LIVE-CHAT','Deine Chats an einem Ort.','Twitch und YouTube lesen, gezielt schreiben und als Widget einbinden.','Chat & Widget'],
-  settings:['DEIN ARBEITSPLATZ','Einstellungen.','Darstellung, Plattformkonten und dein Passwort verwalten.','Einstellungen'],
+  settings:['EINSTELLUNGEN','Streaming-Auswahl.','Ziele für deinen nächsten Stream auswählen und einzeln einrichten.','Streaming-Auswahl'],
+  'settings-twitch':['EINSTELLUNGEN','Twitch.','Twitch-Konto und Streamschlüssel an einem Ort verwalten.','Twitch'],
+  'settings-youtube':['EINSTELLUNGEN','YouTube.','YouTube-Konto, Sendung und Streamschlüssel getrennt einrichten.','YouTube'],
+  'settings-custom':['EINSTELLUNGEN','Eigener Anbieter.','Die Zieladresse deines eigenen Streaming-Anbieters verwalten.','Eigener Anbieter'],
+  'settings-appearance':['EINSTELLUNGEN','Darstellung & Sprache.','Theme und Sprache deiner Oberfläche auswählen.','Darstellung & Sprache'],
   account:['MEIN KONTO','Dein Konto.','Dein eigenes Passwort und deine Anmeldung verwalten.','Mein Konto'],
   'expert-outputs':['EXPERTENMODUS','Ausgänge & Konten.','Weitere Konten und Anbieter hinzufügen, Ausgänge getrennt steuern.','Ausgänge & Konten'],
   expert:['TECHNISCHE VERWALTUNG','Expertenmodus.','MediaMTX-Einstellungen in einem eigenen Bereich.','Expertenmodus'],
@@ -38,6 +44,9 @@ const viewInfo = {
   'expert-recording':['EXPERTENMODUS','Native Aufnahme.','MediaMTX-Aufnahme, Segmente und Aufbewahrung konfigurieren.','Native Aufnahme'],
   'expert-viewers':['EXPERTENMODUS','Zuschauerfreigabe.','Öffentlichen Player freigeben, erneuern oder widerrufen.','Zuschauerfreigabe'],
   'expert-renewal':['EXPERTENMODUS','Neuverbindung.','Verbindungsintervalle und manuelle Neuverbindung.','Neuverbindung'],
+  'expert-automation':['EXPERTENMODUS','Automation & Export.','Hooks, Zeitpläne, Exporte und Benachrichtigungen verwalten.','Automation & Export'],
+  'expert-discord':['EXPERTENMODUS','Discord-Bot.','Bot Schritt für Schritt erstellen und mit deinem Chat verbinden.','Discord-Bot'],
+  'administration-services':['VERWALTUNG','Dienste & Freigaben.','Dienste zentral für alle Benutzer sperren oder wieder freigeben.','Dienste & Freigaben'],
   administration:['VERWALTUNG','Administration.','Benutzer und die gemeinsame Twitch-App verwalten.','Administration']
 };
 function showView(){
@@ -48,9 +57,14 @@ function showView(){
   const previous=currentView;currentView=next;
   for(const view of document.querySelectorAll('.app-view'))view.hidden=view.dataset.view!==next;
   for(const link of document.querySelectorAll('.menu-link')){
-    if(link.hash==='#'+next||link.hash==='#expert'&&next.startsWith('expert-'))link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');
+    if(link.hash==='#'+next||link.hash==='#expert'&&next.startsWith('expert-')||link.hash==='#settings'&&next.startsWith('settings-')||link.hash==='#administration'&&next.startsWith('administration-'))link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');
   }
+  if($('#admin-subnav')){$('#admin-subnav').hidden=!next.startsWith('administration');for(const link of $('#admin-subnav').querySelectorAll('a')){if(link.hash==='#'+next)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');}}
   $('#expert-subnav').hidden=!next.startsWith('expert');
+  $('#settings-subnav').hidden=next!=='settings'&&!next.startsWith('settings-');
+  for(const link of document.querySelectorAll('#settings-subnav a')){
+    if(link.hash==='#'+next)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');
+  }
   for(const link of document.querySelectorAll('#expert-subnav a')){
     if(link.hash==='#'+next)link.setAttribute('aria-current','page');else link.removeAttribute('aria-current');
   }
@@ -68,6 +82,7 @@ function showView(){
   if(next==='recordings')loadRecordings().catch(error=>notify(error.message,true));
   if(next==='chat'||next==='dashboard'&&studioTab==='chat')loadChat();
   if(next==='administration')loadAdmin().catch(error=>notify(error.message,true));
+  window.StreamDeskServices?.apply();
 }
 window.addEventListener('hashchange',showView);
 setInterval(()=>{
@@ -93,6 +108,7 @@ function renderDashboard(data){
   $('#stat-send').replaceChildren(document.createTextNode(data.ok?(data.send_mbps||0).toLocaleString('de-DE',{minimumFractionDigits:2,maximumFractionDigits:2})+' ':'— '));
   for(const selector of ['#stat-receive','#stat-send']){const unit=document.createElement('small');unit.textContent='Mbit/s';$(selector).append(unit);}
   $('#stat-send-note').textContent=data.state==='forwarding'?(data.output.kind==='twitch'?'Zu Twitch':'Zum Streamingziel'):data.state==='renewing'?'Neuverbindung läuft':data.enabled?'Verbindungsaufbau':'Ausgang gestoppt';
+  if(data.bandwidth_warning)$('#stat-send-note').textContent=`Upload-Warnung: ${data.send_mbps.toLocaleString('de-DE')} von ${data.bandwidth_limit_mbps.toLocaleString('de-DE')} Mbit/s · ${data.metrics?.readers||0} Leser`;
   $('#stat-storage').textContent=bytes(stats.used_bytes);
   $('#stat-storage-note').textContent=bytes(stats.free_bytes)+' auf dem Server frei';
   $('#storage-capacity').style.width=Math.min(100,100*(stats.server_used_bytes||0)/(stats.total_bytes||1))+'%';
@@ -130,7 +146,8 @@ async function api(path, body, method = 'POST') {
     else { options.headers['Content-Type'] = 'application/json'; options.body = JSON.stringify(body); }
   }
   const response = await fetch(path, options);
-  if (response.status === 401) { location.href = '/login'; throw new Error('Bitte erneut anmelden.'); }
+  if (response.status === 401) { redirectToLogin(); throw new Error('Bitte erneut anmelden.'); }
+  if (response.status === 204) return {};
   let data;
   try { data = await response.json(); }
   catch (_) {
@@ -152,7 +169,7 @@ function render(data) {
   $('#start').disabled = busy || !online || data.enabled || !data.output.configured || ['queued','processing'].includes(data.upload.state);
   $('#stop').disabled = busy || !online || !data.enabled;
   $('#upload-button').disabled = busy || !online || ['queued','processing'].includes(data.upload.state);
-  const metadataReady = !!data.twitch_edit_ready;
+  const metadataReady = window.StreamDeskServices.allowed('twitch') && !!data.twitch_edit_ready;
   $('#save-channel').disabled = busy || !online || !metadataReady;
   $('#load-channel').disabled = busy || !online || !metadataReady;
   $('#metadata-connect').hidden = metadataReady;
@@ -199,6 +216,7 @@ function render(data) {
   $('#updated').textContent = 'Aktualisiert ' + new Date().toLocaleTimeString('de-DE');
 }
 async function refresh() {
+  if (redirecting) return;
   try { const data = await api('/api/status'); failures = 0; render(data); await Promise.all([currentView==='videos'?loadLibrary():Promise.resolve(),currentView==='recordings'?loadRecordings():Promise.resolve(),currentView==='chat'||currentView==='dashboard'&&studioTab==='chat'?loadChat():Promise.resolve()]); }
   catch (error) {
     failures++;
@@ -229,7 +247,7 @@ async function action(callback, message, target = null) {
   try {
     await callback();
     if (message) { notify(message); formFeedback(target, message); }
-    await refresh();
+    if (!redirecting) await refresh();
   }
   catch(error) { notify(error.message,true); formFeedback(target, error.message, true); }
   finally {
@@ -245,7 +263,7 @@ $('#record-stop').addEventListener('click',()=>action(()=>api('/api/recordings/s
 $('#replay-stop').addEventListener('click',()=>action(()=>api('/api/replay/stop',{}),'Wiederholung beendet. Die normale Quellenwahl übernimmt.',$('.recording-panel')));
 $('#renewal-form').addEventListener('submit',event=>{event.preventDefault();action(async()=>{await api('/api/renewal',{interval:Number($('#renew-interval').value),gap:Number($('#renew-gap').value)});renewalLoaded=false;},'Einstellungen gespeichert.',$('#renewal-form'));});
 $('#renew-now').addEventListener('click',()=>action(()=>api('/api/renewal/now',{}),'Neuverbindung manuell angefordert.',$('#renewal-form')));
-$('#logout').addEventListener('click', () => action(async () => { await api('/api/logout',{}); location.href='/login'; }));
+$('#logout').addEventListener('click', () => action(async () => { await api('/api/logout',{}); redirectToLogin(); }));
 $('#disconnect').addEventListener('click', () => action(() => api('/api/disconnect',{}), 'Ausgänge gestoppt und Streamschlüssel entfernt. Kontofreigaben bleiben erhalten.'));
 $('#oauth').addEventListener('click', event => { if (state?.enabled) { event.preventDefault(); notify('Bitte den Ausgang zuerst stoppen.',true); } });
 $('#metadata-connect').addEventListener('click', event => {
@@ -275,7 +293,6 @@ $('#metadata-form').addEventListener('submit',event=>{
   if(!Object.keys(body).length){formFeedback($('#metadata-form'),'Bitte einen Titel eingeben oder eine Kategorie auswählen.',true);return;}
   action(()=>api('/api/twitch/channel',body),'Titel und Kategorie wurden auf Twitch gespeichert.',$('#metadata-form'));
 });
-$('#kind').addEventListener('change', () => { $('#output-form [name=key]').placeholder=$('#kind').value==='youtube'?'xxxx-xxxx-xxxx-xxxx':'live_…'; $('#key-label').hidden=$('#kind').value==='custom'; $('#url-label').hidden=$('#kind').value!=='custom'; });
 for (const button of document.querySelectorAll('.preview-toggle')) {
   button.addEventListener('click', () => {
     if (button.dataset.slot === '3') { programPreviewWanted = !programPreviewWanted; if (state) window.StreamDeskRouting?.program(state); return; }
@@ -352,7 +369,7 @@ async function loadLibrary(force = false) {
       const save=document.createElement('button');save.type='submit';save.className='secondary';save.textContent='Text-Version erstellen';save.disabled=['queued','processing'].includes(state?.upload?.state) || (selected&&!!state?.enabled);form.append(save);
       form.addEventListener('submit',event=>{event.preventDefault();action(async()=>{await api(`/api/videos/${video.id}/overlay`,{text:text.value,style:readStyle()});},'Text wird verarbeitet. Den Status findest du beim Upload.',form);});editor.append(form);card.append(editor);
       const browserEditor=document.createElement('details');const browserSummary=document.createElement('summary');browserSummary.textContent='Live-Browserquelle (z. B. StreamElements)';browserEditor.append(browserSummary);
-      const browserForm=document.createElement('form');browserForm.className='browser-form';const enableLabel=document.createElement('label');enableLabel.className='checkbox-label';enableLabel.textContent='Browser-Overlay beim Offline-Video einschalten';const enable=document.createElement('input');enable.type='checkbox';enable.checked=video.browser_enabled;enableLabel.append(enable);browserForm.append(enableLabel);
+      const browserForm=document.createElement('form');browserForm.className='browser-form';browserForm.dataset.service='browser_overlays';browserForm.classList.toggle('service-disabled',!window.StreamDeskServices.allowed('browser_overlays'));const enableLabel=document.createElement('label');enableLabel.className='checkbox-label';enableLabel.textContent='Browser-Overlay beim Offline-Video einschalten';const enable=document.createElement('input');enable.type='checkbox';enable.checked=video.browser_enabled;enableLabel.append(enable);browserForm.append(enableLabel);
       const urlLabel=document.createElement('label');urlLabel.textContent='Öffentliche HTTPS-Overlay-Adresse';const url=document.createElement('input');url.type='text';url.spellcheck=false;url.autocomplete='off';url.placeholder=video.browser_enabled?`Gespeichert: ${video.browser_host} – leer lassen zum Beibehalten`:'https://streamelements.com/overlay/…';urlLabel.append(url);browserForm.append(urlLabel);
       const explanation=document.createElement('p');explanation.className='small muted';explanation.textContent=`Wird live transparent über das Video gemischt, inklusive Animationen und Alerts. Ton stammt vom Video. 1920 × 1080; Bildaktualisierung bis zu ${state?.limits?.browser_fps || 10} fps. Maximale Anzahl gleichzeitiger Browserquellen: ${state?.limits?.browser_limit || 1}.`;browserForm.append(explanation);
       const demo=document.createElement('button');demo.type='button';demo.className='ghost';demo.textContent='Test-Overlay-Adresse einsetzen';demo.addEventListener('click',()=>{const base=($('meta[name="public-url"]')?.content||state?.public_url||location.origin).replace(/\/$/,'');url.value=base+'/overlay-demo';enable.checked=true;});browserForm.append(demo);
@@ -404,7 +421,7 @@ function form(id, endpoint, message, done) {
         return;
       }
       if (input.minLength > 0 && input.value.length < input.minLength) {
-        const title = input.type === 'password' ? 'Das Passwort' : 'Der Benutzername';
+        const title = input.labels?.[0]?.textContent.trim() || 'Das Feld';
         formFeedback(element, `${title} benötigt mindestens ${input.minLength} Zeichen.`, true);
         input.focus();
         return;
@@ -418,7 +435,9 @@ function form(id, endpoint, message, done) {
     },message,element);
   });
 }
-form('#output-form','/api/output','Streamschlüssel gespeichert. Wähle oben die gewünschten Plattformen und speichere die Streaming-Auswahl.');
+form('#output-form','/api/output','Anbieter gespeichert. Unter Streaming-Auswahl für den nächsten Start auswählen.');
+form('#twitch-output-form','/api/output','Twitch-Schlüssel gespeichert. Unter Streaming-Auswahl für den nächsten Start auswählen.');
+form('#youtube-output-form','/api/output','YouTube-Schlüssel gespeichert. Unter Streaming-Auswahl für den nächsten Start auswählen.');
 form('#password-form','/api/password','Dein Passwort wurde geändert.');
 form('#user-form','/api/admin/users','Benutzer mit Live-Quellen angelegt.',loadAdmin);
 form('#oauth-form','/api/admin/oauth','Twitch-App gespeichert.',loadAdmin);
@@ -439,7 +458,7 @@ function uploadVideo(file) {
       if (state) render(state);
     };
     xhr.onload = () => {
-      if (xhr.status === 401) { location.href = '/login'; reject(new Error('Bitte erneut anmelden.')); return; }
+      if (xhr.status === 401) { redirectToLogin(); reject(new Error('Bitte erneut anmelden.')); return; }
       if (xhr.status >= 200 && xhr.status < 300 && xhr.response?.ok) { resolve(xhr.response); return; }
       reject(new Error(xhr.response?.error || (xhr.status === 413 ? 'NPMplus hat den Upload abgewiesen. Upload-Limit im Proxy auf mindestens 501 MB setzen.' : `Upload fehlgeschlagen (HTTP ${xhr.status}). Bitte Verbindung und Proxy prüfen.`)));
     };
@@ -471,8 +490,17 @@ async function loadAdmin() {
   const list=$('#user-list');list.replaceChildren();
   for(const user of data.users) {
     const row=document.createElement('div');row.className='user-row';
-    const label=document.createElement('span');label.textContent=user.username+(user.admin?' · Admin':'')+(!user.active?' · deaktiviert':'');row.append(label);
+    const label=document.createElement('span');label.textContent=user.username+' · '+({admin:'Admin',moderator:'Moderator',user:'Benutzer'}[user.role]||user.role)+(!user.active?' · deaktiviert':'');row.append(label);
     if(user.id!==data.current_user_id){
+      const role=document.createElement('select');
+      for(const value of ['user','moderator','admin'])role.append(new Option({user:'Benutzer',moderator:'Moderator',admin:'Admin'}[value],value,false,user.role===value));
+      const owner=document.createElement('select');owner.title='Chat-Konto für Moderator';
+      owner.append(new Option('Chat-Konto wählen',''));
+      for(const candidate of data.users.filter(item=>item.id!==user.id&&item.role!=='moderator'&&item.active))owner.append(new Option(candidate.username,candidate.id,false,candidate.id===user.chat_owner_id));
+      owner.hidden=user.role!=='moderator';role.onchange=()=>owner.hidden=role.value!=='moderator';
+      const saveRole=document.createElement('button');saveRole.type='button';saveRole.className='ghost';saveRole.textContent='Rolle speichern';
+      saveRole.addEventListener('click',()=>action(async()=>{await api(`/api/admin/users/${user.id}/role`,{role:role.value,chat_owner_id:owner.value||null});await loadAdmin();},'Rolle aktualisiert.',row));
+      row.append(role,owner,saveRole);
       const toggle=document.createElement('button');toggle.type='button';toggle.className='ghost';toggle.textContent=user.active?'Deaktivieren':'Aktivieren';
       toggle.addEventListener('click',()=>action(async()=>{await api(`/api/admin/users/${user.id}/toggle`,{});await loadAdmin();},'Benutzer aktualisiert.'));row.append(toggle);
       if(!user.active){
@@ -491,7 +519,7 @@ async function loadAdmin() {
 }
 $('#admin')?.addEventListener('toggle', () => { if($('#admin').open) loadAdmin().catch(error=>notify(error.message,true)); });
 function platformName(kind){return state?.outputs?.find(row=>row.kind===kind)?.label||{twitch:'Twitch',youtube:'YouTube',custom:'Eigener Anbieter'}[kind]||kind;}
-function effectiveOutputs(data){return (data.outputs||[]).filter(x=>data.enabled?data.output_states?.[x.kind]&&data.output_states[x.kind]!=='stopped':x.selected);}
+function effectiveOutputs(data){return (data.outputs||[]).filter(x=>x.allowed!==false&&(data.enabled?data.output_states?.[x.kind]&&data.output_states[x.kind]!=='stopped':x.selected));}
 function renderDestinations(data){
   const destinations=data.outputs||[];const selected=effectiveOutputs(data);
   const signature=JSON.stringify(destinations);
@@ -501,17 +529,21 @@ function renderDestinations(data){
       const destination=destinations.find(x=>x.kind===kind);const row=document.createElement('div');row.className='target-item';
       const label=document.createElement('label');const input=document.createElement('input');input.type='checkbox';input.dataset.outputKind=kind;input.checked=!!destination?.selected;input.disabled=!destination||busy;
       label.append(input,document.createTextNode(platformName(kind)));row.append(label);
-      const badge=document.createElement('span');badge.className='badge';badge.textContent=destination?.configured!==false&&destination?'Eingerichtet':'Schlüssel fehlt';row.append(badge);
-      if(destination&&['twitch','youtube','custom'].includes(kind)){const remove=document.createElement('button');remove.type='button';remove.className='ghost';remove.textContent='Schlüssel löschen';remove.dataset.removeOutput=kind;remove.disabled=data.enabled;remove.addEventListener('click',()=>action(()=>api(`/api/outputs/${kind}/delete`,{}),'Streamschlüssel entfernt.',$('#targets-form')));row.append(remove);}
+      const badge=document.createElement('span');badge.className='badge';badge.textContent=destination?.allowed===false?'Durch Admin gesperrt':destination?.configured!==false&&destination?'Eingerichtet':'Schlüssel fehlt';row.append(badge);
+      const manage=document.createElement('a');manage.className='target-manage';manage.textContent=destination?.configured!==false&&destination?'Verwalten →':'Einrichten →';manage.href=['twitch','youtube','custom'].includes(kind)?'#settings-'+kind:'#expert-outputs';row.append(manage);
       list.append(row);
     }
   }
-  for(const input of document.querySelectorAll('[data-output-kind]'))input.disabled=busy||!destinations.some(d=>d.kind===input.dataset.outputKind&&d.configured!==false);
-  for(const remove of document.querySelectorAll('[data-remove-output]'))remove.disabled=data.enabled||busy;
+  for(const input of document.querySelectorAll('[data-output-kind]'))input.disabled=busy||!destinations.some(d=>d.kind===input.dataset.outputKind&&d.configured!==false&&d.allowed!==false);
+  for(const remove of document.querySelectorAll('[data-remove-output]'))remove.disabled=data.enabled||busy||!destinations.some(row=>row.kind===remove.dataset.removeOutput&&row.configured!==false&&row.allowed!==false);
+  for(const label of document.querySelectorAll('[data-platform-state]')){
+    const ready=destinations.some(row=>row.kind===label.dataset.platformState&&row.configured!==false);
+    label.textContent=ready?'Streaming eingerichtet':'Noch kein Streamschlüssel';label.classList.toggle('good',ready);
+  }
   $('#save-targets').disabled=busy;
-  const saved=destinations.filter(x=>x.selected).map(x=>platformName(x.kind)).join(' + ')||'Keine Plattform';
+  const saved=destinations.filter(x=>x.selected&&x.allowed!==false).map(x=>platformName(x.kind)).join(' + ')||'Keine Plattform';
   if($('#target-summary'))$('#target-summary').textContent='Gespeichert für den nächsten Start: '+saved+(data.enabled?' · Aktueller Stream läuft unverändert weiter.':'');
-  for(const preset of document.querySelectorAll('[data-target-preset]'))preset.disabled=busy||preset.dataset.targetPreset.split(',').filter(Boolean).some(kind=>!destinations.some(d=>d.kind===kind&&d.configured!==false));
+  for(const preset of document.querySelectorAll('[data-target-preset]'))preset.disabled=busy||preset.dataset.targetPreset.split(',').filter(Boolean).some(kind=>!destinations.some(d=>d.kind===kind&&d.configured!==false&&d.allowed!==false));
   const health=$('#destination-health');health.replaceChildren();
   for(const destination of selected){const status=data.output_states?.[destination.kind]||'stopped';const badge=document.createElement('span');badge.className='destination-pill '+status;badge.textContent=platformName(destination.kind)+' · '+({forwarding:'Verbunden',stopped:'Gestoppt',error:'Fehler',connecting:'Verbinde …',renewing:'Neuverbindung'})[status];health.append(badge);}
   const connected=data.chat||{};
@@ -524,7 +556,7 @@ for(const preset of document.querySelectorAll('[data-target-preset]'))preset.add
   for(const checkbox of document.querySelectorAll('[data-output-kind]'))checkbox.checked=chosen.includes(checkbox.dataset.outputKind)&&!checkbox.disabled;
   formFeedback($('#targets-form'),'Auswahl geändert. Bitte mit „Streaming-Auswahl speichern“ übernehmen.');
 });
-$('#targets-form').addEventListener('submit',event=>{event.preventDefault();action(()=>api('/api/outputs/select',{kinds:[...document.querySelectorAll('[data-output-kind]:checked')].map(x=>x.dataset.outputKind)}),'Streaming-Auswahl gespeichert. Konten und gespeicherte Schlüssel bleiben verbunden.',$('#targets-form'));});
+$('#targets-form').addEventListener('submit',event=>{event.preventDefault();const kinds=[...document.querySelectorAll('[data-output-kind]:checked:not(:disabled)')].map(x=>x.dataset.outputKind);action(()=>api('/api/outputs/select',{kinds}),'Streaming-Auswahl gespeichert. Konten und gespeicherte Schlüssel bleiben verbunden.',$('#targets-form'));});
 for(const [button,tab] of [['#studio-chat-tab','chat'],['#studio-meta-tab','metadata']]){
   $(button).addEventListener('click',()=>{studioTab=tab;$('#studio-chat').hidden=tab!=='chat';$('#twitch-metadata').hidden=tab!=='metadata';$('#studio-chat-tab').setAttribute('aria-selected',String(tab==='chat'));$('#studio-meta-tab').setAttribute('aria-selected',String(tab==='metadata'));if(tab==='chat')loadChat();});
 }
@@ -533,9 +565,10 @@ function renderChat(){
   for(const component of document.querySelectorAll('.chat-component')){
     component.querySelector('.chat-twitch-status').textContent='Twitch · '+chatData.connections.twitch;
     component.querySelector('.chat-youtube-status').textContent='YouTube · '+chatData.connections.youtube;
+    component.querySelector('.chat-discord-status').textContent='Discord · '+chatData.connections.discord;
     ChatUI.draw(component.querySelector('.chat-messages'),chatData.messages,component.querySelector('.chat-filter').value);
     const select=component.querySelector('.chat-target');
-    for(const option of select.options)option.disabled=option.value==='both'?!(chatData.twitch_ready&&chatData.youtube_chat_ready):option.value==='twitch'?!chatData.twitch_ready:!chatData.youtube_chat_ready;
+    for(const option of select.options)option.disabled=option.value==='both'?!(chatData.twitch_ready&&chatData.youtube_chat_ready):option.value==='twitch'?!chatData.twitch_ready:option.value==='youtube'?!chatData.youtube_chat_ready:!chatData.discord_ready;
     if(select.selectedOptions[0]?.disabled){const available=[...select.options].find(x=>!x.disabled);if(available)select.value=available.value;}
     component.querySelector('.chat-message').maxLength=select.value==='twitch'?500:200;
     component.querySelector('.chat-send').disabled=component.dataset.sending==='1'||!select.selectedOptions[0]||select.selectedOptions[0].disabled;
@@ -584,12 +617,12 @@ for(const [button,output] of [['#yt-select-chat',false],['#yt-use-output',true]]
 },output?'YouTube-Ausgang und Chat übernommen.':'YouTube-Chat ausgewählt.',$('.youtube-broadcast-controls')));
 $('#youtube-disconnect').addEventListener('click',()=>action(()=>api('/api/youtube/disconnect',{}),'YouTube-Konto getrennt. Der gespeicherte Streamschlüssel bleibt erhalten.'));
 $('#twitch-disconnect').addEventListener('click',()=>action(()=>api('/api/twitch/disconnect',{}),'Twitch-Konto getrennt. Der gespeicherte Streamschlüssel bleibt erhalten.'));
+for(const button of document.querySelectorAll('[data-remove-output]'))button.addEventListener('click',()=>action(()=>api(`/api/outputs/${button.dataset.removeOutput}/delete`,{}),'Streamschlüssel entfernt.',button.closest('.panel')));
 function updateWidgetUrl(){
   if(!widgetBase)return;const url=new URL(widgetBase);url.searchParams.set('platform',$('#widget-platform').value);if($('#widget-transparent').checked)url.searchParams.set('transparent','1');$('#widget-url').value=url.href;$('#widget-copy').disabled=false;$('#widget-open').disabled=false;
 }
 // Also update pages rendered from the running server's template cache.
 $('#widget-url').type='text';
-$('#output-form [name=url]').type='text';
 $('#widget-load').addEventListener('click',()=>action(async()=>{widgetBase=(await api('/api/chat/widget')).url;updateWidgetUrl();},null,$('.widget-settings')));
 $('#widget-rotate').addEventListener('click',()=>action(async()=>{widgetBase=(await api('/api/chat/widget',{})).url;updateWidgetUrl();},'Neuer Widget-Link erstellt. Der bisherige Link ist ungültig.',$('.widget-settings')));
 $('#widget-platform').addEventListener('change',updateWidgetUrl);$('#widget-transparent').addEventListener('change',updateWidgetUrl);

@@ -25,8 +25,15 @@ def install_account_routes(c):
                 raise c.Error('Zum Löschen bitte den Benutzernamen bestätigen.')
             if target['upload_state'] in ('queued','processing') or uid in c.UPLOAD_RESERVATIONS:
                 raise c.Error('Für diesen Benutzer läuft noch eine Medienverarbeitung. Bitte deren Abschluss abwarten.',http_status=409)
+            if c.rows("SELECT id FROM users WHERE role='moderator' AND chat_owner_id=? AND active=1",(uid,)):
+                raise c.Error('Diesem Konto sind aktive Moderatoren zugewiesen. Bitte deren Rolle oder Chat-Zuordnung zuerst ändern.',http_status=409)
             if c.rows("SELECT id FROM recordings WHERE user_id=? AND status IN ('recording','finishing')",(uid,)):
                 raise c.Error('Die Aufnahme dieses Benutzers wird noch beendet. Bitte kurz warten.',http_status=409)
+            automation = c.FEATURES.automation
+            if uid in automation.busy_users:
+                raise c.Error('Für diesen Benutzer läuft noch ein Auftrag oder Export. Bitte dessen Abschluss abwarten.', http_status=409)
+            if c.FEATURES.playback.active_clips.get(uid):
+                raise c.Error('Für diesen Benutzer wird noch ein Clip erstellt. Bitte dessen Abschluss abwarten.', http_status=409)
             prefix = target['prefix']
             if prefix!=c.NAMESPACE+'/'+target['username']+'/':
                 raise c.Error('Dieses ältere Pfadschema benötigt zuerst eine Migration.')
@@ -44,13 +51,15 @@ def install_account_routes(c):
             config['paths'] = {name:value for name,value in config.get('paths',{}).items() if name not in owned}
             config['authInternalUsers'] = [entry for entry in config.get('authInternalUsers',[]) if entry.get('user')!=c.media_username(target)]
             tables = ('videos','recordings','outputs','twitch_auth','youtube_auth','widget_tokens','viewer_links',
-                      'routing_sources','output_routing','routing_programs')
+                      'routing_sources','output_routing','routing_programs','scenes','webauthn_credentials',
+                      'recovery_codes','discord_auth','routing_policy','clips','automation_hooks','scheduled_jobs',
+                      'export_targets','exported_media','notification_settings','webauthn_challenges')
             snapshot = {table:c.rows('SELECT * FROM '+table+' WHERE user_id=?',(uid,)) for table in tables}
             archive = c.DATA/'deleted-users'/(str(uid)+'-'+str(int(time.time()))+'-'+secrets.token_hex(4))
             archive.mkdir(parents=True,mode=0o700)
             moved = []
             try:
-                for folder in (c.DATA/'media'/target['username'],c.DATA/'recordings'/target['username'],
+                for folder in (c.DATA/'media'/target['username'],c.DATA/'recordings'/target['username'],c.DATA/'clips'/target['username'],
                                c.FEATURES.native_root/target['username']):
                     if folder.is_symlink():
                         raise c.Error('Ein Benutzerverzeichnis ist ein symbolischer Link; Löschung abgebrochen.')

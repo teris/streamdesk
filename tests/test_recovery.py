@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
+from types import SimpleNamespace
 
 import yaml
 from media_config import service_acl
@@ -107,6 +108,21 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(args.data_dir, self.data)
         self.assertEqual(args.app_dir, self.app_dir)
         self.assertFalse(args.recover)
+
+    def test_remote_update_preserves_remote_mode_and_endpoints(self):
+        self.data.mkdir()
+        for name in ('app.db','fernet.key','session.key'):
+            (self.data/name).write_bytes(b'fixture')
+        self.old.update(STREAMDESK_MEDIAMTX_MODE='remote-api',STREAMDESK_LOCAL_IPS='203.0.113.10',
+                        MEDIAMTX_API='https://media.example/v3/',MEDIAMTX_HLS='https://media.example/hls/',
+                        MEDIAMTX_RTSP='rtsps://media.example:8322/')
+        self.env.write_text(''.join(key+'='+json.dumps(value)+'\n' for key,value in self.old.items()))
+        args=self.args('update',recover=False,data=False)
+        installer.validate(args)
+        self.assertTrue(args.remote_mediamtx)
+        self.assertEqual(args.mediamtx_client_ip,['203.0.113.10'])
+        self.assertEqual(args.rtsp_url,'rtsps://media.example:8322/')
+        self.assertEqual(args.hls_url,'https://media.example/hls/')
 
     def test_recovery_rejects_different_data_and_media_paths(self):
         args = self.args()
@@ -239,12 +255,16 @@ class RecoveryTests(unittest.TestCase):
                     (self.data / name).write_bytes(b'fixture-new-key')
             return subprocess.CompletedProcess(command, 0)
 
-        def wait(url):
+        def wait(url, **_):
             if fail and url.endswith('/login'):
                 raise RuntimeError('fixture-failed-health-check')
 
         with patch.object(installer, 'dependencies'), patch.object(installer, 'media_service_identity', return_value=(0, 0)), \
+             patch.object(installer, 'ensure_service_accounts', return_value=(
+                 SimpleNamespace(pw_uid=1001, pw_gid=1001), SimpleNamespace(pw_uid=0, pw_gid=0), SimpleNamespace(pw_uid=1002, pw_gid=1002))), \
+             patch.object(installer, 'media_config_permissions', return_value=(0o600, (0, 0))), \
              patch.object(installer.os, 'chown'), patch.object(installer.subprocess, 'run', side_effect=fake_run), \
+             patch.object(installer, 'verify_media_profile', return_value='1.21.3'), \
              patch.object(installer, 'wait_url', side_effect=wait), contextlib.redirect_stdout(io.StringIO()), \
              contextlib.redirect_stderr(io.StringIO()):
             if fail:

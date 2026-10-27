@@ -23,6 +23,7 @@ def outside_namespace(namespace):
 def service_acl(namespace, local_ips=('127.0.0.1', '::1')):
     return {'user': 'any', 'pass': '', 'ips': list(local_ips), 'permissions': [
         {'action': 'api', 'path': ''},
+        {'action': 'metrics', 'path': ''},
         {'action': 'publish', 'path': '~^' + re.escape(namespace) + '/'},
         {'action': 'read', 'path': '~^' + re.escape(namespace) + '/'},
     ]}
@@ -38,7 +39,7 @@ def is_service_acl(entry, namespace):
         ('read', '~^' + re.escape(namespace) + '/'),
     }
     actual = {(p.get('action'), p.get('path') or '') for p in entry.get('permissions') or []}
-    return actual == expected
+    return actual in (expected, expected | {('metrics', '')})
 
 
 def merge_auth(config, namespace, managed_users, local_ips=('127.0.0.1', '::1')):

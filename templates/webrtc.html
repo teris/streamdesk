@@ -4,12 +4,12 @@
     <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="csrf-token" content="{{csrf}}">
     <title>WebRTC · StreamDesk</title>
-    <link rel="stylesheet" href="/static/style.css?v=expert1"><link rel="stylesheet" href="/static/webrtc.css?v=expert1">
-    <script src="/static/webrtc.js?v=rc6" defer></script>
+    <link rel="stylesheet" href="/static/style.css?v={{app_version}}&amp;b={{asset_build}}"><link rel="stylesheet" href="/static/webrtc.css?v={{app_version}}&amp;b={{asset_build}}">
+    <script src="/static/webrtc.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
 </head>
-<body data-program="{{program}}" data-slot="{{slot}}" data-mode="{{mode}}" data-enabled="{{'true' if enabled else 'false'}}">
+<body data-program="{{program}}" data-slot="{{slot}}" data-source="{{source}}" data-mode="{{mode}}" data-enabled="{{'true' if enabled else 'false'}}">
     <main class="rtc-panel"><h1>{{'Browser-Kamera senden' if mode == 'publish' else 'WebRTC-Vorschau'}}</h1>
-        <p>{{'Programm' if slot == 3 else 'Source ' ~ slot}} · Expertenmodus</p>
+        <p>{{'Programm' if slot == 3 else source if source else 'Source ' ~ slot}} · Expertenmodus</p>
         <video id="rtc-video" controls autoplay muted playsinline></video>
         <div class="rtc-controls"><button id="rtc-start" class="primary" {% if not enabled %}disabled{% endif %}>{{'Kamera und Mikrofon starten' if mode == 'publish' else 'Vorschau starten'}}</button><button id="rtc-stop" class="danger" disabled>Verbindung beenden</button></div>
         <p id="rtc-status" role="status">{% if not enabled %}WebRTC ist noch nicht aktiviert. {{'Aktiviere den Server unter Expertenmodus → Protokolle & WebRTC und lade diese Seite anschließend neu.' if admin else 'Bitte einen Administrator, den Server unter Expertenmodus → Protokolle & WebRTC zu aktivieren.'}}{% else %}Bereit. {{'Kamera und Mikrofon werden erst nach deinem Klick freigegeben.' if mode == 'publish' else 'Bei inkompatiblen Codecs die HLS-Vorschau in StreamDesk verwenden.'}}{% endif %}</p>

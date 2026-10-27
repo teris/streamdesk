@@ -7,6 +7,8 @@
     <a href="#expert-playback" data-expert-only {% if not expert %}hidden{% endif %}>Playback</a>
     <a href="#expert-viewers" data-expert-only {% if not expert %}hidden{% endif %}>Zuschauerfreigabe</a>
     <a href="#expert-renewal" data-expert-only {% if not expert %}hidden{% endif %}>Neuverbindung</a>
+    <a href="#expert-automation" data-expert-only {% if not expert %}hidden{% endif %}>Automation &amp; Export</a>
+    <a href="#expert-discord" data-expert-only {% if not expert %}hidden{% endif %}>Discord-Bot</a>
 </nav>
 <section class="app-view" data-view="expert" aria-label="Expertenmodus" hidden>
     <section class="panel expert-overview"><h2>Technische Einstellungen freischalten</h2>
@@ -22,14 +24,18 @@
             <a href="#expert-playback"><strong>Playback</strong><span>Eigene Aufnahmesegmente zeitversetzt abspielen</span></a>
             <a href="#expert-viewers"><strong>Zuschauerfreigabe</strong><span>Öffentlichen Player freigeben oder widerrufen</span></a>
             <a href="#expert-renewal"><strong>Neuverbindung</strong><span>Verbindungsintervalle und manuelles Erneuern</span></a>
+            <a href="#expert-automation"><strong>Automation &amp; Export</strong><span>Hooks, Aufnahme-/Ausgangszeitplan und WebDAV-Export</span></a>
+            <a href="#expert-discord"><strong>Discord-Bot</strong><span>Bot erstellen, einladen und mit deinem Chat verbinden</span></a>
         </div>
     </section>
 </section>
 <section class="app-view" data-view="expert-protocols" data-expert-view aria-label="Protokolle und WebRTC" hidden>{% include 'features-protocols.html' %}</section>
-<section class="app-view" data-view="expert-routing" data-expert-view aria-label="Quellen und Ziele" hidden>{% include 'features-sources.html' %}</section>
+<section class="app-view" data-view="expert-routing" data-expert-view aria-label="Quellen und Ziele" hidden>{% include 'features-sources.html' %}{% include 'features-scenes.html' %}</section>
 <section class="app-view" data-view="expert-recording" data-expert-view aria-label="Native Aufnahme konfigurieren" hidden>{% include 'features-recordings.html' %}</section>
 <section class="app-view" data-view="expert-playback" data-expert-view aria-label="Geschütztes Playback" hidden>{% include 'features-playback.html' %}</section>
 <section class="app-view" data-view="expert-viewers" data-expert-view aria-label="Zuschauerfreigabe" hidden>{% include 'features-viewers.html' %}</section>
 <section class="app-view" data-view="expert-renewal" data-expert-view aria-label="Neuverbindung" hidden>{% include 'features-renewal.html' %}</section>
+<section class="app-view" data-view="expert-automation" data-expert-view aria-label="Automation und Export" hidden>{% include 'features-automation.html' %}</section>
+<section class="app-view" data-view="expert-discord" data-expert-view aria-label="Discord-Bot einrichten" hidden>{% include 'features-discord.html' %}</section>
 
 <section class="app-view" data-view="expert-outputs" data-expert-view aria-label="Ausgänge und Konten" hidden>{% include 'features-outputs.html' %}</section>

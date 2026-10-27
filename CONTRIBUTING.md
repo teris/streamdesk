@@ -12,6 +12,16 @@ bash -n install.sh uninstall.sh
 
 Die Unit-Tests verwenden temporäre Dateien und veröffentlichen weder Streams noch Chatnachrichten. Native MediaMTX-Integrationstests benötigen gesonderte Testports und dürfen keine vorhandene produktive Konfiguration übernehmen.
 
+Die getrennten Plattform-Einstellungen und die Discord-Einrichtung lassen sich ohne MediaMTX und ohne externes Discord-Konto im Browser prüfen:
+
+```bash
+.venv/bin/python -m playwright install chromium
+.venv/bin/python tests/settings_smoke.py
+.venv/bin/python tests/services_smoke.py
+```
+
+Optional schreibt `--screenshots-dir /pfad/zum/vorschauordner` Ansichten mit ausschließlich lokalen Testdaten.
+
 Neue Funktionen müssen Benutzergrenzen beachten. API-Anfragen müssen auf den angemeldeten Benutzer begrenzt bleiben; Widgets dürfen keine Schreibrechte erlangen. Geheimnisse werden ausschließlich verschlüsselt gespeichert und gehören nicht in Logs oder Beispieldaten.
 
 Für einen zusätzlichen lokalen Medientest stehen `tests/media_smoke.py` und Playwright/Chromium zur Verfügung:
@@ -73,3 +83,17 @@ Zwei Quellen mit B-Frames und unterschiedlichen Auflösungen werden parallel ges
 ```
 
 Prüft die Routingmatrix mit fünf Quellen, sechs lokalen Senken und echter Bildprüfung, Programmaufnahme, getrennten Zugangsdatenkarten, Programmauswahl/-link, Passwortwechsel beider Rollen, Löschung eines deaktivierten Benutzers sowie Mobilansichten. `expansion_smoke.py` konzentriert sich ab rc.6 auf privates Playback; `program_smoke.py` prüft Aufnahme- und Vorschaukontinuität, `media_smoke.py` die bisherigen Protokoll-/UI-Funktionen.
+
+## Zusätzliche Regressionen vom 27. Oktober 2026
+
+```bash
+.venv/bin/python tests/account_smoke.py
+.venv/bin/python tests/permissions_smoke.py
+.venv/bin/python tests/on_demand_smoke.py --mediamtx /pfad/zu/mediamtx --ffmpeg /pfad/zu/ffmpeg
+```
+
+Der Kontotest nutzt Chromium mit virtuellem WebAuthn-Authenticator auf `localhost`: Registrierung, Anmeldung, Löschung, Szenenspeicherung und Erhalt ungespeicherter Automationsformulare. Der Berechtigungstest benötigt `setfacl`/`getfacl` aus dem Paket `acl` und prüft temporäre Verzeichnisse ohne root oder Systemkontenänderungen. Der Bedarfsquellentest prüft tatsächliches Videobild, Aktivierung durch einen Programmleser und anschließende Freigabe der Pull-Verbindung. Der Playback-Test prüft zusätzlich persistente Clips beider Segmentformate, Eigentümergrenzen und Löschen. Diese Tests senden keine externen Nachrichten oder öffentlichen Streams.
+
+## Versionsnummern und Lieferpakete
+
+Jedes neue ausgelieferte Updatepaket erhält eine höhere Versionsnummer. Ein bereits geliefertes Paket wird nicht mit geänderten Funktionen unter derselben Versionsnummer ersetzt. Vor dem Packen VERSION erhöhen, neue Änderungen in einem eigenen CHANGELOG-Abschnitt erfassen und README sowie Installationsbeispiele angleichen. Anwendung und Installer lesen ihre Versionsnummer aus VERSION; Browsertests verwenden dieselbe Quelle.

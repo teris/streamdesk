@@ -16,6 +16,7 @@ import secrets
 import shutil
 import socket
 import sqlite3
+import ssl
 import subprocess
 import sys
 import tarfile
@@ -33,7 +34,7 @@ MEDIA_DIGESTS = {
     'amd64': '0a2ea7eba96023631efa1bea7804823a9145b043b6646a8a05798d4ac24ed635',
     'arm64': '27f038237cb5f77a724f6afc58eca2798f2bc4edf9989895631a80eeb41a4fe2',
 }
-FILES = ['app.py', 'account_features.py', 'integrations.py', 'media_config.py', 'media_features.py', 'program_preview.py', 'routing_model.py', 'routing_features.py', 'playback_features.py', 'ROADMAP.md', 'browser_overlay.py', 'bootstrap.py',
+FILES = ['service_policy.py', 'outbound_http.py', 'app.py', 'account_features.py', 'auth_strategy.py', 'automation_features.py', 'build_d_features.py', 'integrations.py', 'media_config.py', 'mediamtx_client.py', 'media_features.py', 'notification_features.py', 'program_preview.py', 'routing_model.py', 'routing_features.py', 'playback_features.py', 'ROADMAP.md', 'browser_overlay.py', 'bootstrap.py',
          'gunicorn.conf.py', 'requirements.txt', 'stream_list.proto', 'stream_list_pb2.py',
          'stream_list_pb2_grpc.py', 'README.md', 'INSTALL.md', 'LICENSE', 'NOTICE', 'LICENSE.youtube-sample.txt', 'VERSION', 'install.sh', 'uninstall.sh', '.env.example', 'CHANGELOG.md', 'FEATURE.md', 'THIRD_PARTY.md', 'SECURITY.md', 'CONTRIBUTING.md', 'TESTING.md']
 
@@ -111,12 +112,28 @@ def parse(argv=None):
     p.add_argument('--mediamtx-config')
     p.add_argument('--mediamtx-binary')
     p.add_argument('--mediamtx-service', default='mediamtx')
+    p.add_argument('--mediamtx-major', type=int, choices=(1, 2), default=1,
+                   help='Explizite Ziel-Major-Version; derzeit ist ausschließlich das geprüfte Profil 1.21.x freigegeben')
     p.add_argument('--api-url', help='Optionaler Control-API-Endpunkt mit gültigem TLS-Zertifikat')
+    p.add_argument('--remote-mediamtx', action='store_true', help='MediaMTX läuft auf einem getrennten Host; keine systemd-Steuerung oder entfernten Dateioperationen')
+    p.add_argument('--mediamtx-client-ip', action='append', default=[], help='Bei Remote-Betrieb: feste StreamDesk-Quell-IP für API-/Medienrechte')
+    p.add_argument('--enable-api-tls', action='store_true', help='Control API auf HTTPS umstellen; benötigt Zertifikat und Schlüssel')
+    p.add_argument('--api-cert', help='PEM-Zertifikat für die MediaMTX-Control-API')
+    p.add_argument('--api-key', help='Privater PEM-Schlüssel für die MediaMTX-Control-API')
+    p.add_argument('--api-ca', help='Optionale CA-Datei, mit der StreamDesk das API-Zertifikat prüft')
+    p.add_argument('--enable-ingest-tls', action='store_true', help='RTMPS und RTSPS mit einem Serverzertifikat aktivieren')
+    p.add_argument('--ingest-cert', help='PEM-Zertifikat für RTMPS/RTSPS')
+    p.add_argument('--ingest-key', help='Privater PEM-Schlüssel für RTMPS/RTSPS')
     p.add_argument('--hls-url')
+    p.add_argument('--rtsp-url')
+    p.add_argument('--webrtc-url')
+    p.add_argument('--playback-url')
+    p.add_argument('--metrics-url')
     p.add_argument('--enable-playback', action='store_true', help='Geschützten Playback-Server explizit auf Loopback aktivieren')
     p.add_argument('--playback-port', type=int, default=9996)
     p.add_argument('--media-bind', default='0.0.0.0')
-    for name, port in [('rtsp', 8554), ('rtmp', 1935), ('srt', 8890), ('api', 9997), ('hls', 8888)]:
+    for name, port in [('rtsp', 8554), ('rtmp', 1935), ('srt', 8890), ('moq', 8892),
+                       ('api', 9997), ('metrics', 9998), ('hls', 8888)]:
         p.add_argument('--' + name + '-port', type=int, default=port, help='Port bei einer Neuinstallation bzw. einem neu aktivierten Listener')
     p.add_argument('--admin-user', default='admin')
     p.add_argument('--admin-password-file', help='Root-private Datei mit dem initialen Passwort; sonst zufällig erzeugt')
@@ -160,6 +177,8 @@ def check_installation_state(a, saved):
 
 
 def validate(a):
+    if a.mediamtx_major != 1:
+        raise ValueError('MediaMTX 2.x besitzt hier noch kein prüfbares StreamDesk-Kompatibilitätsprofil.')
     if a.recover and a.mode == 'standalone':
         raise ValueError('--recover benötigt --mode attach oder --mode update mit vorhandenem MediaMTX.')
     if not re.fullmatch(r'[a-z][a-z0-9_-]{0,39}', a.namespace):
@@ -197,6 +216,14 @@ def validate(a):
         a.mediamtx_binary = a.mediamtx_binary or old.get('STREAMDESK_MEDIAMTX_BINARY')
         a.api_url = a.api_url or old.get('MEDIAMTX_API', '').removesuffix('v3/') or None
         a.hls_url = a.hls_url or old.get('MEDIAMTX_HLS')
+        a.rtsp_url = a.rtsp_url or old.get('MEDIAMTX_RTSP')
+        a.webrtc_url = a.webrtc_url or old.get('MEDIAMTX_WEBRTC')
+        a.playback_url = a.playback_url or old.get('MEDIAMTX_PLAYBACK')
+        a.metrics_url = a.metrics_url or old.get('MEDIAMTX_METRICS')
+        if old.get('STREAMDESK_MEDIAMTX_MODE') == 'remote-api':
+            a.remote_mediamtx = True
+            if not a.mediamtx_client_ip:
+                a.mediamtx_client_ip = old.get('STREAMDESK_LOCAL_IPS', '').split(',')
     if not re.fullmatch(r'[a-z][a-z0-9_-]{0,39}', a.namespace):
         raise ValueError('Ungültiger gespeicherter Namensbereich.')
     if not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_-]{0,59}', a.mediamtx_service) or a.service_name == a.mediamtx_service:
@@ -222,7 +249,8 @@ def validate(a):
         if not re.fullmatch(r'[A-Za-z0-9.-]{1,253}', host) or host.startswith('.'):
             raise ValueError('--ingest-host muss ein Hostname oder eine IP sein.')
     a.ingest_host = '[' + host + ']' if ':' in host else host
-    for value in [a.rtsp_port, a.rtmp_port, a.srt_port, a.api_port, a.hls_port, a.playback_port, port_from(a.bind, 8080)]:
+    for value in [a.rtsp_port, a.rtmp_port, a.srt_port, a.moq_port,
+                  a.api_port, a.metrics_port, a.hls_port, a.playback_port, port_from(a.bind, 8080)]:
         if not 1 <= value <= 65535:
             raise ValueError('Ungültiger Port.')
     if a.mode == 'standalone':
@@ -230,10 +258,23 @@ def validate(a):
         a.mediamtx_binary = Path(a.mediamtx_binary or a.mediamtx_dir / 'mediamtx').resolve()
         if a.mediamtx_config.exists() or a.mediamtx_binary.exists():
             raise ValueError('MediaMTX existiert bereits. --mode attach verwenden; es wird nichts überschrieben.')
-        if len(set([a.rtsp_port, a.rtmp_port, a.api_port, a.hls_port, port_from(a.bind, 8080)])) != 5:
+        if len(set([a.rtsp_port, a.rtmp_port, a.api_port, a.metrics_port, a.hls_port, port_from(a.bind, 8080)])) != 6:
             raise ValueError('TCP-Ports müssen unterschiedlich sein.')
-        if a.enable_playback and a.playback_port in (a.rtsp_port, a.rtmp_port, a.api_port, a.hls_port, port_from(a.bind, 8080)):
+        if a.enable_playback and a.playback_port in (a.rtsp_port, a.rtmp_port, a.api_port, a.metrics_port, a.hls_port, port_from(a.bind, 8080)):
             raise ValueError('Playback benötigt einen eigenen TCP-Port.')
+    elif a.remote_mediamtx:
+        if not a.api_url or not a.api_url.startswith('https://'):
+            raise ValueError('Remote-MediaMTX benötigt eine explizite HTTPS-Adresse über --api-url.')
+        if not a.mediamtx_config or not Path(a.mediamtx_config).is_file():
+            raise ValueError('Remote-MediaMTX benötigt über --mediamtx-config eine lokale, schreibbare Konfigurationsspiegelung.')
+        a.mediamtx_config = Path(a.mediamtx_config).resolve()
+        a.mediamtx_binary = Path(a.mediamtx_binary or '/usr/bin/false')
+        if not a.mediamtx_client_ip:
+            raise ValueError('Remote-MediaMTX benötigt mindestens eine feste --mediamtx-client-ip.')
+        try:
+            a.mediamtx_client_ip = [str(ipaddress.ip_address(value)) for value in a.mediamtx_client_ip]
+        except ValueError:
+            raise ValueError('--mediamtx-client-ip muss eine IPv4- oder IPv6-Adresse sein.') from None
     else:
         candidates = [Path(a.mediamtx_config)] if a.mediamtx_config else [a.mediamtx_dir / 'mediamtx.yml', Path('/etc/mediamtx/mediamtx.yml'), Path('/etc/mediamtx.yml')]
         found = next((p for p in candidates if p.is_file()), None)
@@ -246,9 +287,13 @@ def validate(a):
             raise ValueError('--mediamtx-binary mit dem vorhandenen MediaMTX-Programm angeben.')
         output = subprocess.check_output([str(a.mediamtx_binary), '--version'], text=True).strip()
         match = re.search(r'(\d+)\.(\d+)\.(\d+)', output)
-        if not match or not (1, 21, 3) <= tuple(map(int, match.groups())) < (2, 0, 0):
-            raise ValueError('Benötigt MediaMTX >= 1.21.3 und < 2; erkannt: ' + output)
-    for configured_file in (a.mediamtx_config, a.mediamtx_binary):
+        if not match or tuple(map(int, match.groups())) < (1, 21, 3) or tuple(map(int, match.groups()))[:2] != (1, 21):
+            raise ValueError('Benötigt das geprüfte MediaMTX-Profil 1.21.x ab 1.21.3; erkannt: ' + output)
+        a.detected_media_version = '.'.join(match.groups())
+    configured_files = (a.mediamtx_config,) if a.remote_mediamtx else (a.mediamtx_config, a.mediamtx_binary)
+    if a.mediamtx_config.parent.resolve() in {Path(value) for value in ('/', '/etc', '/usr', '/usr/local', '/var', '/var/lib', '/opt', '/home', '/root')}:
+        raise ValueError('Die MediaMTX-Konfiguration benötigt ein eigenes Verzeichnis, zum Beispiel /opt/mediamtx/mediamtx.yml. Das übergeordnete Systemverzeichnis erhält keine Schreibfreigabe.')
+    for configured_file in configured_files:
         if not re.fullmatch(r'/[A-Za-z0-9_./-]+', str(configured_file)):
             raise ValueError('Dateipfade benötigen einfache absolute Namen ohne Leerzeichen: ' + str(configured_file))
     if a.recover and old.get('MEDIAMTX_CONFIG') and Path(old['MEDIAMTX_CONFIG']).resolve() != a.mediamtx_config:
@@ -274,17 +319,46 @@ def validate(a):
             raise ValueError('Die Passwortdatei darf nur root lesen (chmod 600).')
         if len(password_file.read_text().strip()) < 12:
             raise ValueError('Das Administratorpasswort benötigt mindestens 12 Zeichen.')
+    if a.api_ca:
+        a.api_ca = Path(a.api_ca).resolve()
+        if not a.api_ca.is_file():
+            raise ValueError('CA-Datei fehlt: ' + str(a.api_ca))
+    if a.remote_mediamtx and (a.enable_api_tls or a.enable_ingest_tls or a.enable_playback):
+        raise ValueError('Entfernte Listener und Zertifikate zuerst auf dem Medienserver einrichten; der Remote-Modus ändert keine entfernten Dateien.')
+    if a.enable_api_tls:
+        if not a.api_cert or not a.api_key:
+            raise ValueError('--enable-api-tls benötigt --api-cert und --api-key.')
+        for name in ('api_cert', 'api_key'):
+            value = Path(getattr(a, name)).resolve()
+            if not value.is_file() or value.is_symlink():
+                raise ValueError('TLS-Datei fehlt oder ist kein reguläres File: ' + str(value))
+            setattr(a, name, value)
+        if a.api_ca:
+            a.api_ca = Path(a.api_ca).resolve()
+            if not a.api_ca.is_file() or a.api_ca.is_symlink():
+                raise ValueError('CA-Datei fehlt oder ist kein reguläres File: ' + str(a.api_ca))
+    if a.enable_ingest_tls:
+        if not a.ingest_cert or not a.ingest_key:
+            raise ValueError('--enable-ingest-tls benötigt --ingest-cert und --ingest-key.')
+        for name in ('ingest_cert', 'ingest_key'):
+            value = Path(getattr(a, name)).resolve()
+            if not value.is_file() or value.is_symlink():
+                raise ValueError('TLS-Datei fehlt oder ist kein reguläres File: ' + str(value))
+            setattr(a, name, value)
     return old
 
 
 def fresh_config(a):
     bind = '[' + a.media_bind.strip('[]') + ']' if ':' in a.media_bind else a.media_bind
     return {'logLevel': 'info', 'api': True, 'apiAddress': '127.0.0.1:' + str(a.api_port),
+            'metrics': True, 'metricsAddress': '127.0.0.1:' + str(a.metrics_port),
             'rtsp': True, 'rtspAddress': bind + ':' + str(a.rtsp_port), 'rtspTransports': ['tcp'],
             'rtmp': True, 'rtmpAddress': bind + ':' + str(a.rtmp_port), 'srt': True, 'srtAddress': bind + ':' + str(a.srt_port),
+            'moq': False, 'moqHTTP2Address': bind + ':' + str(a.moq_port),
+            'moqHTTP3Address': bind + ':' + str(a.moq_port), 'moqQUICAddress': bind + ':' + str(a.moq_port + 1),
             'hls': True, 'hlsAddress': '127.0.0.1:' + str(a.hls_port), 'hlsVariant': 'mpegts',
             'webrtc': False, 'playback': False, 'playbackAddress':'127.0.0.1:' + str(a.playback_port),
-            'moq': False, 'authMethod': 'internal', 'authInternalUsers': [], 'paths': {}}
+            'authMethod': 'internal', 'authInternalUsers': [], 'paths': {}}
 
 
 def prepare_config(a, config):
@@ -293,6 +367,15 @@ def prepare_config(a, config):
     if a.enable_playback:
         config['playback'] = True
         config['playbackAddress'] = '127.0.0.1:' + str(a.playback_port)
+    if a.enable_api_tls:
+        config['apiEncryption'] = True
+        config['apiServerCert'] = str(a.mediamtx_config.parent / '.streamdesk-api.crt')
+        config['apiServerKey'] = str(a.mediamtx_config.parent / '.streamdesk-api.key')
+    if a.enable_ingest_tls:
+        certificate = str(a.mediamtx_config.parent / '.streamdesk-ingest.crt')
+        key = str(a.mediamtx_config.parent / '.streamdesk-ingest.key')
+        config.update(rtmpEncryption='optional', rtmpServerCert=certificate, rtmpServerKey=key,
+                      rtspEncryption='optional', rtspServerCert=certificate, rtspServerKey=key)
     if a.recover:
         prefix = a.namespace + '/'
         previous = [name for name in config['paths'] if str(name).startswith(prefix)]
@@ -312,16 +395,16 @@ def prepare_config(a, config):
         raise ValueError('Der Namensbereich ist bereits belegt. Einen anderen --namespace wählen.')
     if a.mode != 'update' and not a.recover and any(str(u.get('user', '')).startswith('streamdesk_' + a.namespace + '_') for u in config.get('authInternalUsers', [])):
         raise ValueError('Der reservierte Präfix für StreamDesk-Medienkonten ist bereits belegt. Einen anderen --namespace wählen.')
-    local_ips = ['127.0.0.1', '::1']
-    for protocol, port in [('api', a.api_port), ('hls', a.hls_port), ('rtsp', a.rtsp_port), ('rtmp', a.rtmp_port), ('srt', a.srt_port)]:
+    local_ips = list(a.mediamtx_client_ip) if a.remote_mediamtx else ['127.0.0.1', '::1']
+    for protocol, port in [('api', a.api_port), ('metrics', a.metrics_port), ('hls', a.hls_port), ('rtsp', a.rtsp_port), ('rtmp', a.rtmp_port), ('srt', a.srt_port)]:
         if not config.get(protocol, protocol not in ('api',)):
             config[protocol] = True
-            config[protocol + 'Address'] = ('127.0.0.1' if protocol in ('api', 'hls', 'rtsp') else a.media_bind) + ':' + str(port)
+            config[protocol + 'Address'] = ('127.0.0.1' if protocol in ('api', 'metrics', 'hls', 'rtsp') else a.media_bind) + ':' + str(port)
             if protocol == 'hls':
                 config['hlsVariant'] = 'mpegts'
         address = config.get(protocol + 'Address', ':' + str(port))
         hostname = urllib.parse.urlsplit('tcp://' + str(address)).hostname
-        if hostname and hostname not in ('0.0.0.0', '::', '127.0.0.1', '::1'):
+        if not a.remote_mediamtx and hostname and hostname not in ('0.0.0.0', '::', '127.0.0.1', '::1'):
             # These are configured local listener addresses, not untrusted client IPs.
             local_ips.extend(x[4][0] for x in socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM))
     local_ips = sorted(set(local_ips), key=lambda p: (p != '127.0.0.1', p))
@@ -333,8 +416,12 @@ def prepare_config(a, config):
 
 
 def media_service_identity(a):
+    if getattr(a, 'remote_mediamtx', False):
+        user = pwd.getpwnam(getattr(a, 'ui_user', 'streamdesk'))
+        return user.pw_uid, user.pw_gid
     if a.mode == 'standalone':
-        return 0, 0
+        user = pwd.getpwnam(getattr(a, 'media_user', 'streamdesk-media'))
+        return user.pw_uid, user.pw_gid
     service_user = subprocess.check_output(['systemctl', 'show', a.mediamtx_service, '--property=User', '--value'], text=True).strip() or 'root'
     dynamic = subprocess.check_output(['systemctl', 'show', a.mediamtx_service, '--property=DynamicUser', '--value'], text=True).strip()
     if dynamic == 'yes':
@@ -346,8 +433,11 @@ def media_service_identity(a):
 
 
 def media_config_permissions(a):
-    uid, gid = media_service_identity(a)
-    return (0o600, (0, 0)) if uid == 0 else (0o640, (0, gid))
+    _, media_gid = media_service_identity(a)
+    ui = pwd.getpwnam(getattr(a, 'ui_user', 'streamdesk'))
+    shared = getattr(a,'shared_group',None)
+    gid = grp.getgrnam(shared).gr_gid if shared else ui.pw_gid if media_gid==0 else media_gid
+    return 0o660, (ui.pw_uid, gid)
 
 
 def native_storage(a, old):
@@ -356,9 +446,11 @@ def native_storage(a, old):
             or directory.resolve().is_relative_to(a.data_dir.resolve())
             or a.data_dir.resolve().is_relative_to(directory.resolve())):
         raise ValueError('Native Aufnahmen benötigen ein eigenes Verzeichnis außerhalb der privaten StreamDesk-Daten.')
-    directory.mkdir(parents=True, exist_ok=True, mode=0o750)
-    directory.chmod(0o750)
-    os.chown(directory, *media_service_identity(a))
+    directory.mkdir(parents=True, exist_ok=True, mode=0o2770)
+    directory.chmod(0o2770)
+    media_uid, media_gid = media_service_identity(a)
+    shared_gid = grp.getgrnam(a.shared_group).gr_gid if getattr(a, 'shared_group', None) else media_gid
+    os.chown(directory, media_uid, shared_gid)
     return directory
 
 
@@ -392,6 +484,12 @@ def backup(a):
         shutil.copy2(a.mediamtx_config, folder / 'mediamtx.yml')
         meta = a.mediamtx_config.stat()
         write_private(folder / 'file-metadata.json', json.dumps({'config_uid': meta.st_uid, 'config_gid': meta.st_gid, 'config_mode': meta.st_mode & 0o777}))
+        if shutil.which('getfacl'):
+            permissions = subprocess.check_output(['getfacl', '-p', str(a.mediamtx_config.parent)], text=True)
+            write_private(folder / 'config-directory.acl', permissions)
+        for name in ('.streamdesk-api.crt', '.streamdesk-api.key', '.streamdesk-ingest.crt', '.streamdesk-ingest.key'):
+            if (a.mediamtx_config.parent / name).is_file():
+                shutil.copy2(a.mediamtx_config.parent / name, folder / name)
     if a.env_file.is_file():
         shutil.copy2(a.env_file, folder / 'streamdesk.env')
     if (a.data_dir / 'app.db').is_file():
@@ -443,12 +541,65 @@ def restore_recovery_data(a, previous):
 def dependencies(a):
     if not a.skip_system_packages:
         run(['apt-get', 'update'])
-        run(['apt-get', 'install', '-y', '--no-install-recommends', 'python3-venv', 'python3-pip', 'python3-yaml', 'ffmpeg', 'fonts-dejavu-core', 'chromium', 'procps', 'ca-certificates'])
-    for command in ('ffmpeg', 'ffprobe', 'systemctl', 'useradd'):
+        run(['apt-get', 'install', '-y', '--no-install-recommends', 'python3-venv', 'python3-pip', 'python3-yaml', 'ffmpeg', 'fonts-dejavu-core', 'chromium', 'procps', 'ca-certificates', 'acl'])
+    for command in ('ffmpeg', 'ffprobe', 'systemctl', 'useradd', 'setfacl', 'getfacl'):
         if not shutil.which(command):
             raise RuntimeError('Fehlende Systemabhängigkeit: ' + command)
     if not Path('/usr/bin/chromium').is_file():
         raise RuntimeError('Chromium fehlt unter /usr/bin/chromium.')
+
+
+def ensure_system_user(name):
+    try:
+        return pwd.getpwnam(name)
+    except KeyError:
+        run(['useradd', '--system', '--no-create-home', '--shell', '/usr/sbin/nologin', name])
+        return pwd.getpwnam(name)
+
+
+def ensure_service_accounts(a):
+    """Create fixed identities and grant the UI only the media group it needs."""
+    ui = ensure_system_user('streamdesk')
+    browser = ensure_system_user('streamdesk-browser')
+    if a.mode == 'standalone':
+        media = ensure_system_user('streamdesk-media')
+        a.media_user, a.media_group = media.pw_name, grp.getgrgid(media.pw_gid).gr_name
+    else:
+        uid, gid = media_service_identity(a)
+        media = pwd.getpwuid(uid)
+        a.media_user, a.media_group = media.pw_name, grp.getgrgid(gid).gr_name
+    media_gid = grp.getgrnam(a.media_group).gr_gid
+    a.shared_group = a.media_group if media_gid != 0 else grp.getgrgid(ui.pw_gid).gr_name
+    memberships = set(grp.getgrnam(a.shared_group).gr_mem)
+    if ui.pw_name not in memberships and ui.pw_gid != grp.getgrnam(a.shared_group).gr_gid:
+        run(['usermod', '--append', '--groups', a.shared_group, ui.pw_name])
+    a.ui_user, a.ui_group = ui.pw_name, grp.getgrgid(ui.pw_gid).gr_name
+    a.browser_user = browser.pw_name
+    if ui.pw_name not in grp.getgrgid(browser.pw_gid).gr_mem:
+        run(['usermod', '--append', '--groups', grp.getgrgid(browser.pw_gid).gr_name, ui.pw_name])
+    return ui, media, browser
+
+
+def storage_permissions(a):
+    """Allow atomic config saves and shared recordings without broad system access."""
+    ui = getattr(a, 'ui_user', 'streamdesk')
+    media = getattr(a, 'media_user', 'streamdesk-media')
+    run(['setfacl', '-m', 'u:'+ui+':rwx,d:u:'+media+':r-x,d:u::rwx,d:g::r-x,d:m::rwx,d:o::---', a.mediamtx_config.parent])
+    acl = 'u:'+ui+':rwx,u:'+media+':rwx,d:u:'+ui+':rwx,d:u:'+media+':rwx,d:u::rwx,d:g::rwx,d:m::rwx,d:o::---'
+    run(['setfacl', '-m', acl, a.native_root])
+    # Existing recordings may have been created with umask 0077. Give the UI
+    # access to these files as well; no permission is granted outside this root.
+    run(['setfacl', '-R', '-m', 'u:'+ui+':rwX', a.native_root])
+
+
+def chown_tree(path, uid, gid):
+    path = Path(path)
+    if not path.exists():
+        return
+    os.chown(path, uid, gid)
+    for root, directories, files in os.walk(path):
+        for name in directories + files:
+            os.chown(Path(root) / name, uid, gid)
 
 
 def service_text(a, media=False):
@@ -461,26 +612,37 @@ Wants=network-online.target
 ExecStart={a.mediamtx_binary} {a.mediamtx_config}
 Restart=on-failure
 RestartSec=3
-User=root
+User={getattr(a, 'media_user', 'streamdesk-media')}
+Group={getattr(a, 'media_group', 'streamdesk-media')}
 UMask=0077
 NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths={a.mediamtx_config.parent} {getattr(a, 'native_root', a.data_dir.parent / (a.data_dir.name + '-native'))}
 [Install]
 WantedBy=multi-user.target
 '''
+    media_dependency = '' if getattr(a, 'remote_mediamtx', False) else ' ' + a.mediamtx_service + '.service'
     return f'''[Unit]
 Description=StreamDesk UI and source manager
-After=network-online.target {a.mediamtx_service}.service
-Wants=network-online.target {a.mediamtx_service}.service
+After=network-online.target{media_dependency}
+Wants=network-online.target{media_dependency}
 [Service]
 WorkingDirectory={a.app_dir}
 EnvironmentFile={a.env_file}
 ExecStart={a.app_dir}/venv/bin/gunicorn --config {a.app_dir}/gunicorn.conf.py app:app
 Restart=always
 RestartSec=3
+User={getattr(a, 'ui_user', 'streamdesk')}
+Group={getattr(a, 'ui_group', 'streamdesk')}
+SupplementaryGroups={getattr(a, 'shared_group', 'streamdesk-media')} streamdesk-browser
 KillMode=control-group
 TimeoutStopSec=15
 UMask=0077
 NoNewPrivileges=true
+AmbientCapabilities=CAP_SETUID CAP_SETGID
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
@@ -490,10 +652,11 @@ WantedBy=multi-user.target
 '''
 
 
-def wait_url(url, seconds=30):
+def wait_url(url, seconds=30, cafile=None):
+    context = ssl.create_default_context(cafile=str(cafile)) if url.startswith('https://') else None
     for _ in range(seconds * 2):
         try:
-            with urllib.request.urlopen(url, timeout=2) as response:
+            with urllib.request.urlopen(url, timeout=2, context=context) as response:
                 if response.status == 200:
                     return
         except (OSError, ValueError):
@@ -502,10 +665,25 @@ def wait_url(url, seconds=30):
     raise RuntimeError('Dienst antwortet nicht: ' + url)
 
 
+def verify_media_profile(api, cafile=None):
+    context = ssl.create_default_context(cafile=str(cafile)) if api.startswith('https://') else None
+    try:
+        with urllib.request.urlopen(api.rstrip('/') + '/v3/info', timeout=5, context=context) as response:
+            info = json.loads(response.read())
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        raise RuntimeError('MediaMTX-Versionsprobe ist fehlgeschlagen.') from error
+    match = re.search(r'(\d+)\.(\d+)\.(\d+)', str(info.get('version', '')))
+    version = tuple(map(int, match.groups())) if match else ()
+    if len(version) != 3 or version < (1, 21, 3) or version[:2] != (1, 21):
+        raise RuntimeError('Die laufende MediaMTX-Version besitzt kein freigegebenes Profil: ' + str(info.get('version', 'unbekannt')))
+    return '.'.join(map(str, version))
+
+
 def install(a, old):
     global yaml
     before_active = subprocess.run(['systemctl', 'is-active', '--quiet', a.service_name], check=False).returncode == 0
-    media_was_active = subprocess.run(['systemctl', 'is-active', '--quiet', a.mediamtx_service], check=False).returncode == 0
+    media_was_active = True if a.remote_mediamtx else subprocess.run(
+        ['systemctl', 'is-active', '--quiet', a.mediamtx_service], check=False).returncode == 0
     try:
         if before_active:
             run(['systemctl', 'stop', a.service_name])
@@ -527,6 +705,7 @@ def install(a, old):
     previous_data = None
     try:
         dependencies(a)
+        ui_identity, _, _ = ensure_service_accounts(a)
         import yaml
         config = fresh_config(a) if a.mode == 'standalone' else yaml.safe_load(a.mediamtx_config.read_text())
         local_ips = prepare_config(a, config)
@@ -561,12 +740,13 @@ def install(a, old):
             run([sys.executable, '-m', 'venv', a.app_dir / 'venv'])
         run([a.app_dir / 'venv/bin/pip', 'install', '-r', a.app_dir / 'requirements.txt'])
         a.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        chown_tree(a.data_dir, ui_identity.pw_uid, ui_identity.pw_gid)
         a.data_dir.chmod(0o700)
         a.native_root = native_storage(a, old)
-        if subprocess.run(['id', 'streamdesk-browser'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode:
-            run(['useradd', '--system', '--no-create-home', '--shell', '/usr/sbin/nologin', 'streamdesk-browser'])
+        storage_permissions(a)
         a.browser_root.mkdir(parents=True, exist_ok=True)
         a.browser_root.chmod(0o711)
+        os.chown(a.browser_root, ui_identity.pw_uid, ui_identity.pw_gid)
         clip = a.data_dir / 'standby.mp4'
         if not clip.exists():
             run(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-nostdin', '-f', 'lavfi', '-i', 'color=c=0x111827:s=1920x1080:r=30',
@@ -576,21 +756,50 @@ def install(a, old):
                  '-c:a', 'aac', '-b:a', '128k', '-movflags', '+faststart', clip])
             clip.chmod(0o600)
         api = a.api_url or endpoint(config.get('apiAddress'), a.api_port, 'https' if config.get('apiEncryption') else 'http')
-        hls = a.hls_url or endpoint(config.get('hlsAddress'), a.hls_port, 'https' if config.get('hlsEncryption') else 'http')
-        rtsp = endpoint(config.get('rtspAddress'), a.rtsp_port, 'rtsp')
+        def media_endpoint(address, port, scheme):
+            if a.remote_mediamtx:
+                host = urllib.parse.urlsplit(api).hostname
+                host = '['+host+']' if ':' in host else host
+                return scheme+'://'+host+':'+str(port_from(address, port))+'/'
+            return endpoint(address, port, scheme)
+        metrics = a.metrics_url or media_endpoint(config.get('metricsAddress'), a.metrics_port, 'https' if config.get('metricsEncryption') else 'http').rstrip('/') + '/metrics'
+        hls = a.hls_url or media_endpoint(config.get('hlsAddress'), a.hls_port, 'https' if config.get('hlsEncryption') else 'http')
+        rtsp = a.rtsp_url or media_endpoint(config.get('rtspAddress'), a.rtsp_port, 'rtsp')
         values = dict(old)
+        api_ca = ''
+        if a.enable_api_tls:
+            media_owner = media_config_permissions(a)[1]
+            write_private(a.mediamtx_config.parent / '.streamdesk-api.crt', a.api_cert.read_text(), 0o640, media_owner)
+            write_private(a.mediamtx_config.parent / '.streamdesk-api.key', a.api_key.read_text(), 0o640, media_owner)
+        if a.api_ca:
+            api_ca_path = a.data_dir / 'mediamtx-api-ca.pem'
+            write_private(api_ca_path, a.api_ca.read_text(), 0o600, (ui_identity.pw_uid, ui_identity.pw_gid))
+            api_ca = str(api_ca_path)
+        if a.enable_ingest_tls:
+            media_owner = media_config_permissions(a)[1]
+            write_private(a.mediamtx_config.parent / '.streamdesk-ingest.crt', a.ingest_cert.read_text(), 0o640, media_owner)
+            write_private(a.mediamtx_config.parent / '.streamdesk-ingest.key', a.ingest_key.read_text(), 0o640, media_owner)
         values.update(STREAMDESK_PUBLIC=a.public_url, STREAMDESK_INGEST=a.ingest_host, STREAMDESK_DATA=str(a.data_dir),
                       STREAMDESK_APP_DIR=str(a.app_dir),
                       STREAMDESK_DEFAULT_CLIP=str(clip), STREAMDESK_NAMESPACE=a.namespace, STREAMDESK_BIND=a.bind,
                       STREAMDESK_NATIVE_ROOT=str(a.native_root),
                       STREAMDESK_BROWSER_ROOT=str(a.browser_root), STREAMDESK_BROWSER_USER='streamdesk-browser',
                       STREAMDESK_LOCAL_IPS=','.join(local_ips), STREAMDESK_MEDIAMTX_SERVICE=a.mediamtx_service,
+                      STREAMDESK_MEDIAMTX_MODE='remote-api' if a.remote_mediamtx else ('local-managed' if a.mode == 'standalone' else old.get('STREAMDESK_MEDIAMTX_MODE','local-attach')),
                       STREAMDESK_MEDIAMTX_BINARY=str(a.mediamtx_binary), MEDIAMTX_CONFIG=str(a.mediamtx_config),
-                      MEDIAMTX_API=api.rstrip('/') + '/v3/', MEDIAMTX_HLS=hls.rstrip('/') + '/', MEDIAMTX_RTSP=rtsp,
+                      STREAMDESK_MEDIAMTX_MAJOR=str(a.mediamtx_major),
+                      MEDIAMTX_API=api.rstrip('/') + '/v3/', MEDIAMTX_API_CA=api_ca or old.get('MEDIAMTX_API_CA', ''),
+                      MEDIAMTX_METRICS=metrics, MEDIAMTX_HLS=hls.rstrip('/') + '/', MEDIAMTX_RTSP=rtsp,
                       MEDIAMTX_RTMP_PORT=str(port_from(config.get('rtmpAddress'), a.rtmp_port)),
                       MEDIAMTX_SRT_PORT=str(port_from(config.get('srtAddress'), a.srt_port)),
+                      MEDIAMTX_MOQ_PORT=str(port_from(config.get('moqHTTP2Address'), a.moq_port)),
                       COOKIE_SECURE='1' if a.public_url.startswith('https:') else '0',
                       STREAMDESK_TRUST_PROXY='1' if a.public_url.startswith('https:') else '0')
+        for name, explicit, address, port, encrypted in (
+                ('MEDIAMTX_WEBRTC', a.webrtc_url, 'webrtcAddress', 8889, 'webrtcEncryption'),
+                ('MEDIAMTX_PLAYBACK', a.playback_url, 'playbackAddress', a.playback_port, 'playbackEncryption')):
+            if explicit or a.remote_mediamtx:
+                values[name] = explicit or media_endpoint(config.get(address), port, 'https' if config.get(encrypted) else 'http')
         if a.mode == 'standalone':
             download_media(a)
             media_created = True
@@ -604,13 +813,16 @@ def install(a, old):
             password = Path(a.admin_password_file).read_text().strip() if a.admin_password_file else secrets.token_urlsafe(24)
             run([a.app_dir / 'venv/bin/python', a.app_dir / 'bootstrap.py'], cwd=a.app_dir, env=environment,
                 input=json.dumps({'username': a.admin_user, 'password': password}) + '\n', text=True)
+        chown_tree(a.data_dir, ui_identity.pw_uid, ui_identity.pw_gid)
+        a.data_dir.chmod(0o700)
         write_private(SYSTEMD_UNIT_DIR / (a.service_name + '.service'), service_text(a), 0o644)
         run(['systemctl', 'daemon-reload'])
         if a.mode == 'standalone':
             run(['systemctl', 'enable', '--now', a.mediamtx_service])
-        elif not media_was_active:
+        elif not a.remote_mediamtx and not media_was_active:
             run(['systemctl', 'start', a.mediamtx_service])
-        wait_url(api.rstrip('/') + '/v3/config/global/get')
+        wait_url(api.rstrip('/') + '/v3/config/global/get', cafile=values.get('MEDIAMTX_API_CA') or None)
+        a.detected_media_version = verify_media_profile(api, values.get('MEDIAMTX_API_CA') or None)
         run([a.app_dir / 'venv/bin/python', '-c',
              'import app,json,sys,yaml; from media_config import synchronize_runtime; '
              'synchronize_runtime(app.mtx,yaml.safe_load(app.CONFIG.read_text()),app.NAMESPACE,obsolete_paths=json.load(sys.stdin))'],
@@ -619,12 +831,15 @@ def install(a, old):
             owner = database.execute('SELECT prefix FROM users ORDER BY id LIMIT 1').fetchone()
         if not owner:
             raise RuntimeError('Die Datenbank enthält keinen eingerichteten Benutzer.')
-        wait_url(api.rstrip('/') + '/v3/config/paths/get/' + urllib.parse.quote(owner[0] + 'source1', safe='/'))
+        wait_url(api.rstrip('/') + '/v3/config/paths/get/' + urllib.parse.quote(owner[0] + 'source1', safe='/'),
+                 cafile=values.get('MEDIAMTX_API_CA') or None)
         run(['systemctl', 'enable', '--now', a.service_name])
         bind_url = endpoint(a.bind, 8080, 'http')
         wait_url(bind_url + 'login')
         marker = {'version': VERSION, 'mode': a.mode, 'recovered': a.recover, 'namespace': a.namespace,
-                  'backup': str(folder), 'media_config': str(a.mediamtx_config)}
+                  'backup': str(folder), 'media_config': str(a.mediamtx_config),
+                  'mediamtx_major': a.mediamtx_major,
+                  'mediamtx_version': getattr(a, 'detected_media_version', MEDIA_VERSION)}
         write_private(a.data_dir / 'installation.json', json.dumps(marker, indent=2) + '\n')
         if password:
             write_private(a.data_dir / 'initial-login.txt', 'Benutzername: ' + a.admin_user + '\nPasswort: ' + password + '\n')
@@ -644,6 +859,17 @@ def install(a, old):
             meta = json.loads((folder / 'file-metadata.json').read_text())
             os.chown(a.mediamtx_config, meta['config_uid'], meta['config_gid'])
             os.chmod(a.mediamtx_config, meta['config_mode'])
+            if (folder / 'config-directory.acl').is_file():
+                subprocess.run(['setfacl','--restore='+str(folder / 'config-directory.acl')],check=False)
+        if a.enable_api_tls or a.enable_ingest_tls:
+            names = ('.streamdesk-api.crt', '.streamdesk-api.key') if a.enable_api_tls else ()
+            names += ('.streamdesk-ingest.crt', '.streamdesk-ingest.key') if a.enable_ingest_tls else ()
+            for name in names:
+                target = a.mediamtx_config.parent / name
+                if (folder / name).exists():
+                    shutil.copy2(folder / name, target)
+                else:
+                    target.unlink(missing_ok=True)
         if (folder / 'streamdesk.env').exists():
             shutil.copy2(folder / 'streamdesk.env', a.env_file)
         elif ui_touched:
@@ -687,7 +913,8 @@ def main(argv=None):
         raise RuntimeError('Python 3.11 oder neuer wird benötigt.')
     a = parse(argv)
     old = validate(a)
-    print('Modus: ' + a.mode + '\nUI: ' + a.public_url + '\nMediaMTX: ' + str(a.mediamtx_config) + '\nPrivater Medien-Namensbereich: ' + a.namespace + '/')
+    print('Modus: ' + a.mode + '\nUI: ' + a.public_url + '\nMediaMTX: ' + str(a.mediamtx_config)
+          + '\nMediaMTX-Zielprofil: ' + str(a.mediamtx_major) + '\nPrivater Medien-Namensbereich: ' + a.namespace + '/')
     if a.recover:
         print('Wiederaufsetzen: neue Datenbank und neue Zugangsdaten; bisherige Datenreste und Konfiguration werden gesichert.')
     if a.dry_run:

@@ -1,6 +1,6 @@
 # Feature-Übersicht – MediaMTX - StreamDesk
 
-Stand: Version 1.1.0-rc.3 · Bezug: MediaMTX **v1.21.x**
+Stand: Version 1.1.0 · Bezug: MediaMTX **v1.21.3**
 Dies ist ein Community-UI um MediaMTX, kein offizieller Bestandteil von MediaMTX.
 
 ---
@@ -19,13 +19,13 @@ Dies ist ein Community-UI um MediaMTX, kein offizieller Bestandteil von MediaMTX
 | Expertenmodus | Eigener Menüpunkt und Untermenüs; pro Anmeldung standardmäßig aus, serverseitige Prüfung technischer Endpunkte, globale Einstellungen zusätzlich nur für Administratoren |
 | Theme und Mobilgeräte | Helles/dunkles/System-Theme pro Benutzer und Touch-Bedienelemente, unabhängig vom Expertenmodus |
 
-### Erweiterungen ab 1.1.0-rc.1
+### Erweiterungen in 1.1.0
 
 Die folgenden **Einstellungen und technischen Aktionen benötigen den Expertenmodus**. Bereits gespeicherte Einstellungen bleiben beim Ausschalten wirksam. Normale Bedienung, Chat, Medienbibliotheken und Design bleiben verfügbar. Details: [Expertenmodus](docs/EXPERT_MODE.md).
 
 | Feature | Umfang |
 | --- | --- |
-| Manuelle Quellenwahl | Auto / Source 1 / Source 2 / Offline; gewählte Live-Quelle fehlt → Offline beim Senden |
+| Routing je Ausgang | Source 1 / Source 2 sowie ausdrücklich angelegte Zusatzquellen; Priorität und Zuordnung gelten je Ausgang |
 | Per-Ziel Start/Stopp | Einzelne konfigurierte Ziele steuern, andere Ziele und nächste Startauswahl erhalten |
 | WebRTC Publish/Play | Browser-Kamera über WHIP, Vorschau über WHEP, tenantbezogener Signalisierungsproxy |
 | WebRTC-Servereinstellung | Aktivierung und zusätzliche erreichbare Hosts, zusätzlich Administratorrechte erforderlich |
@@ -54,10 +54,11 @@ Die folgenden **Einstellungen und technischen Aktionen benötigen den Expertenmo
 
 | Feature | Beschreibung |
 | --- | --- |
-| Zwei Live-Quellen | OBS (Vorrang) und Handy (Fallback) |
-| Automatische Umschaltung | Engine wählt stabile Quelle; bei Ausfall Fallback bzw. Offline |
+| Zwei feste Live-Quellen | Source 1 (OBS, Vorrang) und Source 2 (Handy, Fallback), unveränderlich |
+| Zusätzliche Quellen | Bis zu zehn Quellen insgesamt; zusätzliche Publish- oder öffentliche RTSP-/RTSPS-Pull-Quellen nur im Expertenmodus |
+| Automatische Umschaltung | Engine wählt je Programm die erste stabile zugeordnete Quelle; bei Ausfall folgt die nächste Priorität bzw. Offline |
 | Offline-Videobibliothek | MP4-Upload (max. 500 MiB / 5 Min.), Auswahl, Löschen, Vorschau |
-| Standby erst mit Ausgang | Offline-Schleife startet erst bei aktivem Forward |
+| Standby bei Bedarf | Offline-Schleife läuft für Vorschau, Aufnahme oder aktiven Forward |
 | Text-Overlay | Bis zu drei Zeilen, Position/Stil, einmalig eingerechnet |
 | Browser-Overlay | Live-Chromium-Overlay (z. B. StreamElements), Demo-Seite eingebaut |
 | Manuelle Aufnahme | Live / Source 1 / Source 2 → MP4, Download |
@@ -67,20 +68,32 @@ Die folgenden **Einstellungen und technischen Aktionen benötigen den Expertenmo
 
 | Feature | Beschreibung |
 | --- | --- |
-| Multistream | Twitch + YouTube + Custom gleichzeitig möglich |
+| Multistream | Twitch + YouTube + eigener Anbieter; bis zu zehn getrennte Ausgänge einschließlich zusätzlicher Konten im Expertenmodus |
 | Zielauswahl speichern | Gilt beim nächsten Start; Konten bleiben verbunden |
 | Streamschlüssel / OAuth | Twitch-Schlüssel oder OAuth; YouTube-Schlüssel oder Sendungsauswahl |
 | Twitch-Metadaten | Titel und Kategorie setzen |
 | Twitch-Neuverbindung | Optionales Intervall inkl. manueller „Jetzt neu verbinden“ |
-| Custom-Ausgang | Beliebige öffentliche RTMP/RTMPS/SRT/RTSP-Adresse |
+| Eigene Ausgänge | Mehrere benannte öffentliche RTMP/RTMPS/SRT/RTSP-Ziele, getrennt start- und stoppbar |
 
 ### Chat
 
 | Feature | Beschreibung |
 | --- | --- |
-| Gemeinsamer Live-Chat | Twitch und YouTube in einer Ansicht |
-| Gezieltes Senden | Nur Twitch, nur YouTube oder beide |
+| Gemeinsamer Live-Chat | Twitch, YouTube und Discord in einer Ansicht |
+| Gezieltes Senden | An einen oder mehrere verbundene Chats |
 | Chat-Widget | Nur-lesen-Link für OBS-Dock/Browserquelle, rotierbar |
+
+### BUILD D
+
+| Feature | Beschreibung |
+| --- | --- |
+| Szenen | Gespeicherte Quellenprogramme, Overlay-Video und Ziele; Anwendung nur bei gestopptem Ausgang |
+| Live-Browser-Compositor | Browser-Overlay auf Offline-Video oder gewählter Live-Quelle |
+| Rollen | Benutzer, einem Chat-Konto zugewiesene Nur-Chat-Moderatoren und Administratoren |
+| Passkeys | WebAuthn-Anmeldung mit ES256/RS256 und zehn rotierbaren Einmal-Recovery-Codes |
+| Discord-Chat | Verschlüsselt gespeicherter Bot-Adapter für Lesen und Senden in einem Textkanal |
+| Mehrsprachigkeit | Zentrale EN/DE-Stringschicht und persönliche Sprachpräferenz; ältere Detailtexte werden schrittweise markiert |
+| Twitch-Zeitplan | Automationsauftrag für Titel, optionale Kategorie und anschließenden Twitch-Start |
 
 ---
 
@@ -102,7 +115,7 @@ Priorität ist eine grobe Einordnung für die Roadmap, keine Zusage.
 
 | Idee | MediaMTX-Basis | Nutzen | Priorität |
 | --- | --- | --- | --- |
-| **Playback aufgezeichneter Segmente** | Playback-Server / `playback` | Zeitversetzte Wiedergabe, Clips aus Segmenten | mittel |
+| **Persistente Clips aus Live-HLS/Aufnahme** | Playback-Server / `playback` | Gespeicherte kurze Ausschnitte; Segment-Ausschnitte und Download sind bereits vorhanden | mittel |
 | **Aufnahmeplan / Zeitsteuerung** | Hooks + Scheduler im UI | Geplante Sessions, Nachtschichten | mittel |
 | **Cloud-Export** | nach Record-Hook | S3/WebDAV nach Segmentende | niedrig |
 
@@ -110,8 +123,6 @@ Priorität ist eine grobe Einordnung für die Roadmap, keine Zusage.
 
 | Idee | MediaMTX-Basis | Nutzen | Priorität |
 | --- | --- | --- | --- |
-| **Mehr als zwei Live-Quellen** | weitere Paths | Kamera 3, Discord-Capture, … | mittel |
-| **Externe Pull-Quellen** | `source: rtsp://…` / `rpiCamera` | IP-Kameras, Raspberry Pi Cam | mittel |
 | **Source-on-demand** | `sourceOnDemand` | Ressourcen sparen, wenn niemand liest | niedrig |
 | **Fallback-Kette konfigurierbar** | Path + Engine | Reihenfolge und Timeouts im UI | mittel |
 | **runOnPublish / runOnReady Hooks** | `runOnPublish`, `runOnReady`, … | Discord-Webhook, eigene Skripte | mittel |
@@ -121,7 +132,6 @@ Priorität ist eine grobe Einordnung für die Roadmap, keine Zusage.
 
 | Idee | MediaMTX-Basis | Nutzen | Priorität |
 | --- | --- | --- | --- |
-| **Unbegrenzt viele Custom-Ziele** | mehrere `forward`-Einträge | Mehr als Twitch/YouTube/ein Custom | mittel |
 | **Kick, Facebook, Trovo-Vorlagen** | Forward-URLs | Vorgefertigte Ingest-Profile | niedrig |
 | **Bandbreiten-/Bitrate-Hinweis** | Metrics + UI | Warnung bei zu vielen Zielen | niedrig |
 | **Proxy-Pfad zu anderem Server** | Path-Proxy | Kaskade / Edge-Server | niedrig |
@@ -136,19 +146,6 @@ Priorität ist eine grobe Einordnung für die Roadmap, keine Zusage.
 | **Dienst ohne root** | systemd + Capabilities | Härtere Isolation der UI | hoch |
 | **Remote-MediaMTX** | API + getrennte Config | UI und Medienserver auf getrennten Hosts | mittel |
 | **Docker-/Compose-Packaging** | – | Einfachere Labor-/Cloud-Setups | mittel |
-
-### UI und Plattform-Erweiterungen
-
-| Idee | Beschreibung | Priorität |
-| --- | --- | --- |
-| **Szenen / Layouts** | Gespeicherte Kombinationen Quelle + Overlay + Ziele | mittel |
-| **Stream-Zeitplan** | Start/Stopp und Twitch-Titel nach Uhrzeit | niedrig |
-| **Benachrichtigungen** | Webhook/E-Mail bei Offline, Speicher voll, Forward-Fehler | mittel |
-| **2FA / Passkeys** | Zusätzlicher Login-Schutz | niedrig |
-| **Rollen** | Moderator nur Chat, kein Stream-Start | niedrig |
-| **Clip-Erzeugung** | Kurzer Ausschnitt aus laufender Aufnahme/HLS | mittel |
-| **Mehrsprachigkeit** | EN/DE umschaltbar | niedrig |
-| **Discord-Chat** | Weitere Chat-Quelle neben Twitch/YouTube | niedrig |
 
 ---
 

@@ -95,6 +95,8 @@ def main():
                 stdout=subprocess.DEVNULL,stderr=publish_log))
             core.ENGINE.thread = threading.Thread(target=core.ENGINE.run,daemon=True)
             core.ENGINE.thread.start()
+            # Exercise the production reconciliation path after starting the explicit test engine.
+            os.environ['STREAMDESK_ENGINE']='1'
             until(lambda: core.ENGINE.snapshot.get(uid,{}).get('selected') == 1)
             # Deliberately local destinations are allowed only inside this test context.
             with core.LOCK:
@@ -109,6 +111,21 @@ def main():
                 assert client.post('/api/outputs/twitch/start',json={},headers=headers).status_code==200
                 assert client.post('/api/outputs/youtube/start',json={},headers=headers).status_code==200
             until(lambda: all(core.ENGINE.snapshot[uid]['output_states'].get(kind)=='forwarding' for kind in ('twitch','youtube')))
+            saved_outputs=core.rows('SELECT * FROM outputs WHERE user_id=? ORDER BY kind',(uid,))
+            assert client.post('/api/admin/services',json={'id':'twitch','enabled':False},headers=headers).status_code==200
+            until(lambda: core.ENGINE.snapshot[uid]['output_states'].get('twitch')=='stopped')
+            assert core.ENGINE.snapshot[uid]['output_states']['youtube']=='forwarding'
+            assert client.post('/api/outputs/twitch/start',json={},headers=headers).status_code==403
+            assert core.rows('SELECT * FROM outputs WHERE user_id=? ORDER BY kind',(uid,))==saved_outputs
+            assert client.post('/api/admin/services',json={'id':'twitch','enabled':True},headers=headers).status_code==200
+            assert not core.configured_forwards(user)[core.output_path(user,'twitch')]
+            with patch.object(core,'validate_output',side_effect=lambda value:value):
+                assert client.post('/api/outputs/twitch/start',json={},headers=headers).status_code==200
+            until(lambda: core.ENGINE.snapshot[uid]['output_states'].get('twitch')=='forwarding')
+            assert client.post('/api/admin/services',json={'id':'recording','enabled':False},headers=headers).status_code==200
+            until(lambda: core.mtx('config/paths/get/'+user['prefix']+'source2')['record'] is False)
+            assert client.post('/api/admin/services',json={'id':'recording','enabled':True},headers=headers).status_code==200
+            until(lambda: core.mtx('config/paths/get/'+user['prefix']+'source2')['record'] is True)
             assert client.post('/api/outputs/youtube/stop',json={},headers=headers).status_code==200
             until(lambda: core.ENGINE.snapshot[uid]['output_states'].get('youtube')=='stopped')
             assert core.ENGINE.snapshot[uid]['output_states']['twitch']=='forwarding'
@@ -128,7 +145,7 @@ def main():
                 page.wait_for_function("() => location.hash === '#expert'")
                 assert not page.locator('#webrtc-server-form').is_visible()
                 assert page.request.post(address+'/api/sources/mode',headers={'X-CSRF-Token':'smoke-csrf'},data={'mode':'source2'}).status==403
-                page.goto(address+'/#settings');page.wait_for_selector('#theme-form')
+                page.goto(address+'/#settings-appearance');page.wait_for_selector('#theme-form')
                 assert not page.locator('#source-mode-form').is_visible()
                 assert not page.locator('#native-form').is_visible()
                 if args.screenshots_dir:
@@ -154,7 +171,7 @@ def main():
                 assert page.request.post(address+'/api/routing/sources/source1',headers={'X-CSRF-Token':'smoke-csrf'},data={'priority':5}).status==403
                 assert core.rows('SELECT source_mode FROM users WHERE id=?',(uid,))[0]['source_mode']=='auto'
                 until(lambda: core.ENGINE.snapshot[uid].get('selected')==1)
-                page.goto(address+'/#settings');page.wait_for_selector('#theme-form')
+                page.goto(address+'/#settings-appearance');page.wait_for_selector('#theme-form')
                 assert not page.locator('#expert-subnav').is_visible()
                 assert not page.locator('#expert-form').is_visible()
                 page.set_viewport_size({'width':390,'height':844})
@@ -179,10 +196,14 @@ def main():
                 response=client.get(segments[0]['url']);assert response.status_code==200;response.close()
                 segment_path=core.FEATURES.recording_directory(user,segments[0]['source'])/segments[0]['name']
                 subprocess.run([str(ffmpeg),'-v','error','-i',str(segment_path),'-t','1','-f','null','-'],check=True,capture_output=True)
+                assert client.post('/api/admin/services',json={'id':'webrtc','enabled':False},headers=headers).status_code==200
+                until(lambda: not core.FEATURES.program_preview.jobs)
+                assert client.get('/api/webrtc/ice').status_code==403
+                assert client.get('/program/main/index.m3u8').status_code==200
                 assert not errors,errors
                 browser.close()
             assert yaml.safe_load(config.read_text())['paths']['foreign']=={'source':'publisher'}
-            print('PASS: real MediaMTX forwarding, isolated target stop, manual source fallback, browser themes/mobile/expert gating, WHIP camera, WHEP preview, HLS viewer/revocation and native segments.')
+            print('PASS: real MediaMTX forwarding, global provider suspension with retained keys, native recording pause/resume, WebRTC suspension with continuing HLS preview, isolated target stop, themes/mobile/expert gating, WHIP/WHEP, viewer revocation and native segments.')
         finally:
             if sys.exc_info()[0]:
                 print('Engine snapshots:',core.ENGINE.snapshot,flush=True)

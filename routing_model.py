@@ -45,6 +45,7 @@ class RoutingModel:
                   user_id INTEGER NOT NULL, key TEXT NOT NULL, ordinal INTEGER NOT NULL,
                   label TEXT NOT NULL, protocol TEXT NOT NULL, endpoint TEXT NOT NULL DEFAULT '',
                   priority INTEGER NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, deleted INTEGER NOT NULL DEFAULT 0,
+                  source_on_demand INTEGER NOT NULL DEFAULT 0,
                   PRIMARY KEY(user_id,key), UNIQUE(user_id,ordinal));
                 CREATE TABLE IF NOT EXISTS output_routing(
                   user_id INTEGER NOT NULL, kind TEXT NOT NULL, sources TEXT NOT NULL,
@@ -52,7 +53,14 @@ class RoutingModel:
                 CREATE TABLE IF NOT EXISTS routing_programs(
                   user_id INTEGER NOT NULL, id TEXT NOT NULL, sources TEXT NOT NULL,
                   PRIMARY KEY(user_id,id));
+                CREATE TABLE IF NOT EXISTS routing_policy(
+                  user_id INTEGER PRIMARY KEY, healthy_seconds REAL NOT NULL DEFAULT 3,
+                  stall_seconds REAL NOT NULL DEFAULT 5, retry_seconds REAL NOT NULL DEFAULT 10,
+                  native_standby INTEGER NOT NULL DEFAULT 0);
             ''')
+            source_columns = {row['name'] for row in connection.execute('PRAGMA table_info(routing_sources)')}
+            if 'source_on_demand' not in source_columns:
+                connection.execute('ALTER TABLE routing_sources ADD COLUMN source_on_demand INTEGER NOT NULL DEFAULT 0')
             if connection.execute("SELECT value FROM settings WHERE name='routing_model_v1'").fetchone():
                 return
         config = yaml.safe_load(c.CONFIG.read_text()) or {}
@@ -108,7 +116,7 @@ class RoutingModel:
 
     def sources(self, user, archived=False):
         extra = self.c.rows('SELECT * FROM routing_sources WHERE user_id=?'+('' if archived else ' AND deleted=0'), (user['id'],))
-        result = [dict(row) for row in DEFAULT_SOURCES]
+        result = [dict(row, source_on_demand=False) for row in DEFAULT_SOURCES]
         result += [dict(row, fixed=False, enabled=bool(row['enabled']) and not row['deleted']) for row in extra]
         return sorted(result, key=lambda row:(row['priority'], row.get('ordinal', row['priority'])))
 
@@ -119,7 +127,19 @@ class RoutingModel:
         return result
 
     def public_sources(self, user):
-        return [{key:row[key] for key in ('key','label','protocol','priority','fixed','enabled')} for row in self.sources(user)]
+        return [{key:row[key] for key in ('key','label','protocol','priority','fixed','enabled','source_on_demand')} for row in self.sources(user)]
+
+    def policy(self, user):
+        rows = self.c.rows('SELECT * FROM routing_policy WHERE user_id=?', (user['id'],))
+        return rows[0] if rows else {'user_id':user['id'], 'healthy_seconds':3, 'stall_seconds':5,
+                                     'retry_seconds':10, 'native_standby':0}
+
+    def save_policy(self, user, healthy, stall, retry, native_standby):
+        self.c.write('''INSERT INTO routing_policy(user_id,healthy_seconds,stall_seconds,retry_seconds,native_standby)
+                        VALUES (?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET
+                        healthy_seconds=excluded.healthy_seconds,stall_seconds=excluded.stall_seconds,
+                        retry_seconds=excluded.retry_seconds,native_standby=excluded.native_standby''',
+                     (user['id'],healthy,stall,retry,int(native_standby)))
 
     def route(self, user, kind):
         result = self.c.rows('SELECT sources FROM output_routing WHERE user_id=? AND kind=?', (user['id'],kind))

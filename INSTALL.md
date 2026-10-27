@@ -4,7 +4,7 @@
 
 - Debian 12 oder 13 mit laufendem systemd, Python mindestens 3.11, root-Zugang und Internet.
 - amd64 oder arm64 für die gemeinsame Neuinstallation. Bereits installierte MediaMTX-Binaries anderer Architekturen können im Attach-Modus verwendet werden.
-- MediaMTX **>= 1.21.3 und < 2.0**. Für eine vorhandene ältere Version ist zuerst ein MediaMTX-Update nötig; der Attach-Installer aktualisiert fremde Binaries nicht.
+- MediaMTX **1.21.x ab 1.21.3**. Das Zielprofil wird mit `--mediamtx-major 1` explizit gewählt. Ungeprüfte Minor- und Major-Schemata werden fail-closed abgewiesen; siehe [Kompatibilitätsmatrix](docs/MEDIAMTX_COMPATIBILITY.md).
 - Eine öffentliche HTTPS-Adresse und Reverse Proxy für Twitch-/YouTube-OAuth. Für einen lokalen Funktionstest ist HTTP möglich; Kontofreigaben erfordern die konfigurierte HTTPS-Adresse.
 - Platz für Videos und Aufnahmen. Bei 6 Mbit/s entstehen ungefähr 2,7 GB pro Aufnahmestunde. Zwei CPU-Kerne und 2 GiB RAM sind ein Ausgangspunkt für einen kleinen Testbetrieb; gleichzeitig verwendete Browser-Overlays brauchen zusätzliche Reserven.
 
@@ -17,8 +17,8 @@ ZIP auf den Linux-Server übertragen und dort entpacken:
 ```bash
 apt-get update
 apt-get install -y unzip python3
-unzip streamdesk-1.1.0-rc.6.zip
-cd streamdesk-1.1.0-rc.6
+unzip streamdesk-1.1.6.zip
+cd streamdesk-1.1.6
 bash install.sh --help
 ```
 
@@ -76,7 +76,7 @@ sudo cat /var/lib/streamdesk/initial-login.txt
 systemctl status streamdesk mediamtx
 ```
 
-Die Datei ist nur für root lesbar. Mit diesen Daten an der öffentlichen UI-Adresse anmelden und unter Einstellungen das Passwort ändern. Danach die Datei entfernen:
+Die Datei ist nur für root lesbar. Mit diesen Daten an der öffentlichen UI-Adresse anmelden und unter **Mein Konto** das Passwort ändern. Danach die Datei entfernen:
 
 ```bash
 sudo rm /var/lib/streamdesk/initial-login.txt
@@ -170,6 +170,20 @@ Plattformkonten, Streamschlüssel und Benutzer müssen neu eingerichtet werden. 
 `--bind 127.0.0.1:8080` beschränkt das UI auf einen lokalen Proxy; der Standard `0.0.0.0:8080` erlaubt auch einen Proxy auf einem anderen Host. Ports für eine neue MediaMTX-Instanz: `--rtsp-port`, `--rtmp-port`, `--srt-port`, `--api-port`, `--hls-port`. Bei Attach bleiben bereits aktivierte Listener erhalten.
 
 `--api-url` und `--hls-url` können vorhandene HTTPS-Endpunkte mit einem gültigen, systemweit vertrauten Zertifikat benennen. Es gibt keinen Schalter zum Abschalten der Zertifikatsprüfung.
+
+Seit dem Dienstbetrieb mit eigener UI-Identität benötigt die MediaMTX-Konfiguration ein dediziertes Verzeichnis, etwa `/opt/mediamtx/mediamtx.yml` oder `/etc/mediamtx/mediamtx.yml`. Der Installer vergibt dort eine begrenzte Schreib-ACL für atomare Konfigurationsänderungen. Ein direktes Systemverzeichnis wie `/etc` wird dafür nicht freigegeben. Native Aufnahmeverzeichnisse erhalten Setgid-/Default-ACLs. Bei `--skip-system-packages` müssen deshalb auch `setfacl` und `getfacl` installiert sein.
+
+### HTTPS und zusätzliche Endpunkte
+
+`--enable-api-tls --api-cert /pfad/server.crt --api-key /pfad/server.key` aktiviert HTTPS für die Control API. `--api-ca /pfad/ca.pem` kann eine eigene CA bereitstellen und funktioniert auch beim Verbinden einer schon verschlüsselten entfernten API. Zertifikatsprüfung bleibt eingeschaltet.
+
+`--enable-ingest-tls --ingest-cert /pfad/server.crt --ingest-key /pfad/server.key` richtet RTMPS/RTSPS zunächst optional ein. Interne RTSP-Programme bleiben dadurch verfügbar. Falls Endpunkte über einen Proxy oder auf einem anderen Host liegen, stehen zusätzlich `--rtsp-url`, `--webrtc-url`, `--playback-url` und `--metrics-url` zur Verfügung.
+
+### Entfernter Medienserver und Container
+
+Remote-Betrieb ist ein ergänzender Pfad, kein Ersatz für die geprüfte lokale Installation. Er benötigt `--remote-mediamtx`, eine HTTPS-`--api-url`, eine lokale Konfigurationsspiegelung über `--mediamtx-config` und mindestens eine genaue UI-Quelladresse über `--mediamtx-client-ip`. Der Spiegel muss die bestehenden fremden Pfade und vollständigen Auth-Daten enthalten. Listener, Zertifikate und Netzwerkfreigaben werden vorher am Medienserver eingerichtet; StreamDesk verändert dort keine Datei oder systemd-Unit. Beim Update werden Betriebsart und gespeicherte Endpunkte übernommen. Native Dateifunktionen benötigen einen unter identischen Pfaden eingebundenen gemeinsamen Speicher sowie `STREAMDESK_NATIVE_SHARED=1`.
+
+Für Docker/Compose liegen `Dockerfile`, `.dockerignore`, `compose.yml` und `deploy/mediamtx.yml` bei. Vor `docker compose up -d --build` müssen `STREAMDESK_ADMIN_PASSWORD` und für andere Hosts `STREAMDESK_PUBLIC`/`STREAMDESK_INGEST` gesetzt sein. Die Volumes erhalten Konfiguration, Daten und native Aufnahmen. `GET /healthz` antwortet nur bei laufendem und verbundenem Quellenmanager mit HTTP 200. Zusätzliche Medienlistener benötigen eigene Portzuordnungen. Ein vollständiger Container-/Remote-Deploymenttest gehört noch zu den [offenen Prüfgrenzen](docs/REVIEW_2026-10-27.md#verbleibende-prüfgrenzen).
 
 `--skip-system-packages` ist für vorbereitete Test-/Deployment-Systeme vorgesehen. FFmpeg, ffprobe, Chromium und die übrigen Systemabhängigkeiten müssen dann bereits installiert sein. Der Installer prüft sie und installiert weiterhin die Python-Abhängigkeiten.
 

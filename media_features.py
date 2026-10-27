@@ -13,6 +13,7 @@ import urllib.request
 
 from flask import Response, jsonify, render_template, request, send_file, session
 import yaml
+from auth_strategy import AUTH_KEYS, configure as configure_auth, snapshot as auth_snapshot
 
 
 class MediaFeatures:
@@ -31,6 +32,12 @@ class MediaFeatures:
         from playback_features import PlaybackFeatures
         self.routing = RoutingFeatures(core, self)
         self.playback = PlaybackFeatures(core, self)
+        from automation_features import AutomationFeatures
+        self.automation = AutomationFeatures(core)
+        from notification_features import NotificationFeatures
+        self.notifications = NotificationFeatures(core)
+        from build_d_features import BuildDFeatures
+        self.build_d = BuildDFeatures(core)
 
     def body(self):
         body = request.get_json(silent=True)
@@ -95,13 +102,18 @@ class MediaFeatures:
             if folder.is_symlink():
                 raise self.c.Error('Aufnahmeverzeichnis nicht verfügbar.', http_status=404)
         if create:
+            if os.getenv('STREAMDESK_MEDIAMTX_MODE') == 'remote-api' and os.getenv('STREAMDESK_NATIVE_SHARED') != '1':
+                raise self.c.Error('Native Aufnahmen auf einem entfernten Server benötigen einen ausdrücklich gemeinsam eingebundenen Speicher (STREAMDESK_NATIVE_SHARED=1).',http_status=409)
             if not self.native_root.is_dir():
                 raise self.c.Error('Das Verzeichnis für native Aufnahmen fehlt. Bitte den Installer im Update-Modus ausführen.')
             owner = self.native_root.stat()
             folder = self.native_root
             for part in directory.relative_to(self.native_root).parts:
                 folder = folder / part
-                folder.mkdir(mode=0o750, exist_ok=True)
+                existed = folder.exists()
+                folder.mkdir(mode=0o2770, exist_ok=True)
+                if not existed:
+                    folder.chmod(0o2770)
                 if os.geteuid() == 0:
                     os.chown(folder, owner.st_uid, owner.st_gid)
         if not directory.resolve().is_relative_to(self.native_root.resolve()):
@@ -169,11 +181,15 @@ class MediaFeatures:
         @app.post('/api/preferences')
         @login
         def preferences(user):
-            theme = self.body().get('theme')
+            body = self.body()
+            theme = body.get('theme', user['theme'])
+            language = body.get('language', user['language'])
             if theme not in ('system', 'dark', 'light'):
                 raise c.Error('Ungültiges Theme.', http_status=400)
-            c.write('UPDATE users SET theme=? WHERE id=?', (theme, user['id']))
-            return jsonify(ok=True, theme=theme)
+            if language not in ('de', 'en'):
+                raise c.Error('Ungültige Sprache.', http_status=400)
+            c.write('UPDATE users SET theme=?,language=? WHERE id=?', (theme, language, user['id']))
+            return jsonify(ok=True, theme=theme, language=language)
 
         @app.post('/api/sources/mode')
         @expert
@@ -243,7 +259,16 @@ class MediaFeatures:
                                 'auth_ready': bool(auth_ready), 'runtime_checked': isinstance(runtime, dict),
                                 'publish_passphrase_required': bool(config['paths'].get(c.paths(user)[1], {}).get(
                                     'srtPublishPassphrase', (config.get('pathDefaults') or {}).get('srtPublishPassphrase', '')))},
-                           native_storage_ready=self.native_root.is_dir(),
+                           protocol_encryption={'rtmp':config.get('rtmpEncryption', 'no'),
+                                                'rtsp':config.get('rtspEncryption', 'no'),
+                                                'certificate_ready':bool(config.get('rtmpServerCert') and config.get('rtmpServerKey')
+                                                                         and config.get('rtspServerCert') and config.get('rtspServerKey'))},
+                           bandwidth_limit_mbps=float(c.setting('bandwidth_limit_mbps', '0') or 0),
+                           auth={'method':config.get('authMethod', 'internal'),
+                                 'address':config.get('authHTTPAddress') or config.get('authJWTJWKS') or '',
+                                 'claim_key':config.get('authJWTClaimKey', 'mediamtx_permissions')},
+                           listeners={'moq':bool(config.get('moq', False))},
+                           native_storage_ready=self.native_root.is_dir() and (os.getenv('STREAMDESK_MEDIAMTX_MODE')!='remote-api' or os.getenv('STREAMDESK_NATIVE_SHARED')=='1'),
                            native_free_mb=shutil.disk_usage(self.native_root).free // 1048576 if self.native_root.is_dir() else None)
 
         @app.post('/api/native-recording')
@@ -349,28 +374,119 @@ class MediaFeatures:
                     raise c.Error('WebRTC-Konfiguration konnte nicht gespeichert werden.') from None
             return jsonify(ok=True)
 
-        @app.get('/webrtc/<int:slot>/<mode>/')
+        @app.post('/api/admin/protocol-encryption')
         @expert
-        def rtc_page(user, slot, mode):
-            if slot not in (1, 2, 3) or mode not in ('publish', 'play') or mode == 'publish' and slot == 3:
+        def configure_protocol_encryption(user):
+            if not user['admin']:
+                raise c.Error('Nur Administratoren können globale MediaMTX-Einstellungen ändern.', http_status=403)
+            body = self.body()
+            rtmp, rtsp = body.get('rtmp'), body.get('rtsp')
+            if rtmp not in ('no', 'optional', 'strict') or rtsp not in ('no', 'optional', 'strict'):
+                raise c.Error('Ungültiger Verschlüsselungsmodus.', http_status=400)
+            if rtsp == 'strict' and c.RTSP.startswith('rtsp://'):
+                raise c.Error('RTSPS erforderlich setzt einen geprüften RTSPS-Endpunkt für die interne Programmverarbeitung voraus. Bis dahin optional verwenden.', http_status=409)
+            config = self.config()
+            if (rtmp != 'no' and not (config.get('rtmpServerCert') and config.get('rtmpServerKey'))
+                    or rtsp != 'no' and not (config.get('rtspServerCert') and config.get('rtspServerKey'))):
+                raise c.Error('Zertifikat und Schlüssel zuerst mit dem Installer einrichten.')
+            self.apply_global({'rtmpEncryption':rtmp, 'rtspEncryption':rtsp},
+                              {'rtmpEncryption':'no', 'rtspEncryption':'no'})
+            return jsonify(ok=True)
+
+        @app.post('/api/admin/bandwidth')
+        @expert
+        def configure_bandwidth(user):
+            if not user['admin']:
+                raise c.Error('Nur Administratoren können den Bandbreitengrenzwert ändern.', http_status=403)
+            try:
+                limit = float(self.body().get('limit_mbps', 0))
+            except (TypeError, ValueError):
+                raise c.Error('Ungültiger Bandbreitengrenzwert.') from None
+            if not 0 <= limit <= 100000:
+                raise c.Error('Der Bandbreitengrenzwert muss zwischen 0 und 100000 Mbit/s liegen.')
+            c.set_setting('bandwidth_limit_mbps', str(limit))
+            return jsonify(ok=True, limit_mbps=limit)
+
+        @app.post('/api/admin/auth-strategy')
+        @expert
+        def auth_strategy(user):
+            if not user['admin']:
+                raise c.Error('Nur Administratoren können die MediaMTX-Authentifizierung ändern.', http_status=403)
+            body = self.body()
+            if body.get('method') != 'internal':
+                raise c.Error('HTTP-/JWT-Authentifizierung benötigt noch eine vollständige Anbindung der persönlichen Medienzugänge und ist deshalb gesperrt. Die interne Authentifizierung bleibt erhalten.', http_status=409)
+            with c.LOCK:
+                config = self.config()
+                previous = auth_snapshot(config)
+                try:
+                    configure_auth(config, body.get('method'), address=body.get('address', ''),
+                                   claim_key=body.get('claim_key', 'mediamtx_permissions'))
+                except ValueError as error:
+                    raise c.Error(str(error)) from None
+                change = {key:config.get(key) for key in AUTH_KEYS
+                          if key in config or key in previous}
+                try:
+                    c.mtx('config/global/patch', change)
+                    c.atomic(c.CONFIG, yaml.safe_dump(config, sort_keys=False, allow_unicode=True))
+                    c.mtx('config/global/get')
+                except (OSError, c.Error):
+                    rollback = {key:previous.get(key) for key in AUTH_KEYS if key in previous or key in change}
+                    try:
+                        c.mtx('config/global/patch', rollback)
+                    except c.Error:
+                        c.logging.error('MediaMTX-Auth-Rollback benötigt den gespeicherten Konfigurations-Watcher.')
+                    original = self.config()
+                    for key in AUTH_KEYS:
+                        original.pop(key, None)
+                    original.update(previous)
+                    c.atomic(c.CONFIG, yaml.safe_dump(original, sort_keys=False, allow_unicode=True))
+                    raise c.Error('Auth-Wechsel fehlgeschlagen und wurde zurückgenommen.') from None
+            return jsonify(ok=True, method=config['authMethod'])
+
+        @app.post('/api/admin/listeners')
+        @expert
+        def configure_listeners(user):
+            if not user['admin']:
+                raise c.Error('Nur Administratoren können globale Listener ändern.', http_status=403)
+            body = self.body()
+            change = {}
+            for name in ('moq',):
+                change[name] = self.boolean(body, name)
+            self.apply_global(change, {'moq':False})
+            return jsonify(ok=True)
+
+        @app.get('/webrtc/<int:slot>/<mode>/')
+        @app.get('/webrtc/source/<key>/<mode>/')
+        @expert
+        def rtc_page(user, mode, slot=None, key=None):
+            if mode not in ('publish', 'play') or slot is not None and (slot not in (1, 2, 3) or mode == 'publish' and slot == 3):
                 raise c.Error('Ungültige WebRTC-Quelle.', http_status=404)
+            if key is not None and c.MODEL.source(user,key)['protocol'] != 'webrtc':
+                raise c.Error('Diese Quelle verwendet kein WebRTC.', http_status=404)
             enabled = bool(self.config().get('webrtc', True))
             if enabled:
                 self.rtc_base()
             program = request.args.get('program','main')
             if slot==3:
                 c.MODEL.program(user,program)
-            return render_template('webrtc.html',slot=slot,mode=mode,program=program,csrf=session['csrf'],enabled=enabled,admin=bool(user['admin']))
+            return render_template('webrtc.html',slot=slot or 0,source=key or '',mode=mode,program=program,csrf=session['csrf'],enabled=enabled,admin=bool(user['admin']))
 
         @app.post('/api/webrtc/<int:slot>/<mode>')
+        @app.post('/api/webrtc/source/<key>/<mode>')
         @expert
-        def rtc_offer(user, slot, mode):
-            if slot not in (1, 2, 3) or mode not in ('publish', 'play') or mode == 'publish' and slot == 3:
+        def rtc_offer(user, mode, slot=None, key=None):
+            if mode not in ('publish', 'play') or slot is not None and (slot not in (1, 2, 3) or mode == 'publish' and slot == 3):
                 raise c.Error('Ungültige WebRTC-Quelle.', http_status=404)
             if request.mimetype != 'application/sdp' or request.content_length is None or not 1 <= request.content_length <= 65536:
                 raise c.Error('Ungültiges SDP-Angebot.', http_status=400)
             base = self.rtc_base()
-            path = c.paths(user)[slot - 1]
+            if key is not None:
+                source = c.MODEL.source(user,key)
+                if source['protocol'] != 'webrtc' or not source['enabled']:
+                    raise c.Error('Diese WebRTC-Quelle ist deaktiviert.', http_status=404)
+                path = user['prefix'] + key
+            else:
+                path = c.paths(user)[slot - 1]
             if slot == 3:
                 path = self.program_preview.ensure(user,request.args.get('program','main'))
             if slot == 1 and user['replay_recording_id']:

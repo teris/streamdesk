@@ -61,6 +61,14 @@ def main():
                 public=core.app.test_client();assert public.get(spans[-1]['url']).status_code==401
                 with public.session_transaction() as session:session.update(uid=other,version=1,csrf='other',expert_mode=True)
                 assert public.get(spans[-1]['url']).status_code==404
+                clip=post('/api/clips',{'name':'Fixture '+fmt,'source':key,'start':spans[-1]['start'],'duration':1})
+                ident=clip['id']
+                assert client.get('/media/clip/'+str(ident)).status_code==200
+                assert public.get('/media/clip/'+str(ident)).status_code==404
+                stored=core.rows('SELECT path FROM clips WHERE id=?',(ident,))[0]
+                subprocess.run([str(args.ffmpeg),'-v','error','-i',stored['path'],'-f','null','-'],check=True,capture_output=True)
+                assert client.delete('/api/clips/'+str(ident),headers=headers).status_code==204
+                assert not Path(stored['path']).exists()
                 print('PASS:',fmt,'owned playback decoded; anonymous and foreign-tenant requests rejected.',flush=True)
             current=yaml.safe_load(config.read_text());assert current['paths']['foreign']=={'source':'publisher'};assert foreign in current['authInternalUsers']
         finally:

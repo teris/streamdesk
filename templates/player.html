@@ -5,9 +5,9 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>{{viewer ~ ' · Live' if viewer else 'Vorschau'}}</title>
-    <link rel="stylesheet" href="/static/player.css">
+    <link rel="stylesheet" href="/static/player.css?v={{app_version}}&amp;b={{asset_build}}">
     <script src="hls.min.js" defer></script>
-    <script src="/static/player.js" defer></script>
+    <script src="/static/player.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
 </head>
 
 <body><video controls autoplay muted playsinline></video>

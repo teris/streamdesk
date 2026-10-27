@@ -14,6 +14,7 @@ class ProgramPreview:
         return self.c.MODEL.program(user,program)['rtc_path']
 
     def start(self, user, program='main'):
+        self.c.SERVICES.require('webrtc')
         c = self.c
         definition = c.MODEL.program(user,program)
         key = job_key(user,program)
@@ -65,6 +66,9 @@ class ProgramPreview:
                 job['process'].wait()
 
     def monitor(self, users, paths):
+        if not self.c.SERVICES.enabled('webrtc'):
+            self.close()
+            return
         c, now = self.c, time.monotonic()
         with c.LOCK:
             active = {job_key(user,program['id']) for user in users for program in c.MODEL.programs(user)}

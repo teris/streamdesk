@@ -22,6 +22,9 @@ os.environ.update(STREAMDESK_ENGINE='0', STREAMDESK_DATA=str(BASE / 'data'), MED
                   STREAMDESK_PUBLIC='https://stream.example.com', MEDIAMTX_RTMP_PORT='11935', MEDIAMTX_SRT_PORT='18890')
 sys.path.insert(0, str(ROOT))
 import app
+COOKIE_CLOCK = patch('itsdangerous.TimestampSigner.get_timestamp', return_value=int(app.time.time()))
+# Session assertions must not depend on wall-clock corrections on the test host.
+COOKIE_CLOCK.start()
 app.app.config['TESTING'] = True
 with patch.object(app.threading, 'Thread'):
     UID = app.add_user('alice', 'Fixture-Only-Password-12345')
@@ -29,6 +32,7 @@ with patch.object(app.threading, 'Thread'):
 
 
 def tearDownModule():
+    COOKIE_CLOCK.stop()
     tempfile.tempdir = old_temp
     TEMP.cleanup()
 
@@ -178,7 +182,9 @@ class MediaFeatureTests(unittest.TestCase):
         app.write('UPDATE users SET admin=1 WHERE id=?',(UID,))
         self.addCleanup(app.write,'UPDATE users SET admin=0 WHERE id=?',(UID,))
         page = Views();page.feed(self.client.get('/').get_data(as_text=True))
-        for form, view in {'theme-form':'settings','expert-form':'expert','source-create':'expert-routing',
+        for form, view in {'theme-form':'settings-appearance','expert-form':'expert','source-create':'expert-routing',
+                           'targets-form':'settings','twitch-output-form':'settings-twitch','youtube-output-form':'settings-youtube',
+                           'output-form':'settings-custom','discord-form':'expert-discord',
                            'native-form':'expert-recording','webrtc-server-form':'expert-protocols',
                            'renewal-form':'expert-renewal'}.items():
             self.assertEqual(page.forms[form], view, form)
@@ -312,6 +318,48 @@ class MediaFeatureTests(unittest.TestCase):
             self.assertEqual(mtx.call_args.args[1],{'webrtc':True,'webrtcAdditionalHosts':['ingest.example.com']})
             self.assertEqual(self.client.post('/api/admin/webrtc',json={'enabled':True,'hosts':['https://invalid/path']},headers=self.headers).status_code,400)
 
+    def test_protocol_encryption_bandwidth_and_tenant_metrics(self):
+        self.enable()
+        app.write('UPDATE users SET admin=1 WHERE id=?',(UID,))
+        self.addCleanup(app.write,'UPDATE users SET admin=0 WHERE id=?',(UID,))
+        config=yaml.safe_load(app.CONFIG.read_text())
+        config.update(rtmpServerCert='/tmp/cert',rtmpServerKey='/tmp/key',rtspServerCert='/tmp/cert',rtspServerKey='/tmp/key')
+        app.CONFIG.write_text(yaml.safe_dump(config))
+        with patch.object(app,'mtx'):
+            response=self.client.post('/api/admin/protocol-encryption',json={'rtmp':'optional','rtsp':'optional'},headers=self.headers)
+            self.assertEqual(response.status_code,200)
+            self.assertEqual(self.client.post('/api/admin/protocol-encryption',json={'rtmp':'optional','rtsp':'strict'},headers=self.headers).status_code,409)
+        response=self.client.post('/api/admin/bandwidth',json={'limit_mbps':12.5},headers=self.headers)
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(float(app.setting('bandwidth_limit_mbps')),12.5)
+
+        class Metrics:
+            def __enter__(self): return self
+            def __exit__(self,*_): pass
+            def read(self,_): return (b'paths_readers{name="unittest/alice/live"} 3\n'
+                                      b'paths_readers{name="unittest/bobby/live"} 99\n'
+                                      b'paths_errors_total{name="unittest/alice/live"} 2\n')
+        app.PROMETHEUS_CACHE.clear()
+        with patch('app.urllib.request.urlopen',return_value=Metrics()):
+            values=app.prometheus_metrics(self.user)
+        self.assertEqual(values,{'readers':3,'errors':2,'available':True})
+
+    def test_external_auth_strategy_is_admin_only_and_rolls_back(self):
+        self.enable()
+        self.assertEqual(self.client.post('/api/admin/auth-strategy',json={'method':'http','address':'https://id.example/auth'},headers=self.headers).status_code,403)
+        app.write('UPDATE users SET admin=1 WHERE id=?',(UID,))
+        self.addCleanup(app.write,'UPDATE users SET admin=0 WHERE id=?',(UID,))
+        before = app.CONFIG.read_text()
+        with patch.object(app,'mtx',return_value={}) as change:
+            response=self.client.post('/api/admin/auth-strategy',json={'method':'jwt','address':'https://id.example/jwks','claim_key':'permissions'},headers=self.headers)
+        self.assertEqual(response.status_code,409)
+        change.assert_not_called()
+        self.assertEqual(app.CONFIG.read_text(),before)
+        with patch.object(app,'mtx',side_effect=[{},app.Error('fixture'),{}]):
+            response=self.client.post('/api/admin/auth-strategy',json={'method':'internal'},headers=self.headers)
+        self.assertEqual(response.status_code,400)
+        self.assertEqual(yaml.safe_load(app.CONFIG.read_text())['authMethod'],'internal')
+
     def test_webrtc_session_cleanup_is_bound_to_owner_and_survives_mode_off(self):
         self.enable()
         upstream=io.BytesIO(b'v=0\r\n')
@@ -346,7 +394,7 @@ class ExpansionTests(unittest.TestCase):
         self.user = app.rows('SELECT * FROM users WHERE id=?',(UID,))[0]
         self.config = app.CONFIG.read_text()
         self.outputs = app.rows('SELECT * FROM outputs WHERE user_id=?',(UID,))
-        self.routing_tables={table:app.rows('SELECT * FROM '+table+' WHERE user_id=?',(UID,)) for table in ('routing_sources','output_routing','routing_programs')}
+        self.routing_tables={table:app.rows('SELECT * FROM '+table+' WHERE user_id=?',(UID,)) for table in ('routing_sources','output_routing','routing_programs','routing_policy')}
         for table in self.routing_tables:app.write('DELETE FROM '+table+' WHERE user_id=?',(UID,))
         self.addCleanup(self.restore)
         app.write('DELETE FROM outputs WHERE user_id=?',(UID,))
@@ -376,6 +424,40 @@ class ExpansionTests(unittest.TestCase):
         app.MODEL.save_route(self.user,kind,['source1','source2'])
         app.reconcile()
         return kind
+
+    def test_webrtc_mpegts_and_rtp_sources_are_scoped_and_validated(self):
+        with patch.object(app,'reconcile'):
+            webrtc=self.post('/api/routing/sources',{'label':'Browser','protocol':'webrtc'})
+            self.assertEqual(webrtc.status_code,200)
+            bad=self.post('/api/routing/sources',{'label':'Unsicher','protocol':'mpegts','url':'udp+mpegts://0.0.0.0:12000'})
+            self.assertEqual(bad.status_code,400)
+            mpegts=self.post('/api/routing/sources',{'label':'Transport','protocol':'mpegts','url':'udp+mpegts://0.0.0.0:12000?source=93.184.216.34'})
+            self.assertEqual(mpegts.status_code,200,mpegts.json)
+            rtp=self.post('/api/routing/sources',{'label':'RTP','protocol':'rtp','url':'udp+rtp://239.1.2.3:12002',
+                'sdp':'v=0\no=- 1 1 IN IP4 239.1.2.3\ns=RTP\nt=0 0\nm=video 12002 RTP/AVP 96\na=rtpmap:96 H264/90000\n'})
+            self.assertEqual(rtp.status_code,200,rtp.json)
+        details=self.client.get('/api/ingest/'+mpegts.json['key']).json
+        self.assertEqual(details['mpegts'],'udp://127.0.0.1:12000')
+
+    def test_routing_policy_source_on_demand_and_native_standby(self):
+        temporary=tempfile.TemporaryDirectory();self.addCleanup(temporary.cleanup)
+        native_root=Path(temporary.name)
+        environment=patch.dict(os.environ,{'STREAMDESK_NATIVE_ROOT':str(native_root)})
+        environment.start();self.addCleanup(environment.stop)
+        with patch.object(app,'reconcile'):
+            response=self.post('/api/routing/policy',{'healthy_seconds':1.5,'stall_seconds':8,'retry_seconds':12,'native_standby':True})
+        self.assertEqual(response.status_code,200,response.json)
+        policy=app.MODEL.policy(self.user)
+        self.assertEqual((policy['healthy_seconds'],policy['stall_seconds'],policy['retry_seconds'],policy['native_standby']),(1.5,8,12,1))
+        with patch.object(app,'validate_output',return_value='rtsp://camera.example/live'),patch.object(app,'reconcile'):
+            source=self.post('/api/routing/sources',{'label':'Bedarfskamera','protocol':'proxy','url':'rtsp://camera.example/live','source_on_demand':True})
+        self.assertEqual(source.status_code,200,source.json)
+        app.reconcile()
+        config=yaml.safe_load(app.CONFIG.read_text())
+        self.assertTrue(config['paths'][self.user['prefix']+source.json['key']]['sourceOnDemand'])
+        standby=Path(config['paths'][self.user['prefix']+'live']['alwaysAvailableFile'])
+        self.assertTrue(standby.is_relative_to(native_root))
+        self.assertEqual(standby.read_bytes(),Path(self.user['offline']).read_bytes())
 
     def source(self,protocol='srt',url='',label='Camera'):
         response=self.post('/api/routing/sources',{'label':label,'protocol':protocol,'url':url})
@@ -499,7 +581,8 @@ class ExpansionTests(unittest.TestCase):
         self.assertEqual(self.post('/api/admin/playback',{'enabled':True}).status_code,403)
         app.write('UPDATE users SET admin=1 WHERE id=?',(UID,))
         for address in (':9996','0.0.0.0:9996','remote.example:9996','http://127.0.0.1:9996','127.0.0.1:0','127.0.0.1:9996/path'):
-            self.assertEqual(self.post('/api/admin/playback',{'enabled':True,'address':address}).status_code,400)
+            response=self.post('/api/admin/playback',{'enabled':True,'address':address})
+            self.assertEqual(response.status_code,400,response.json)
         with patch.object(app,'mtx') as mtx:
             self.assertEqual(self.post('/api/admin/playback',{'enabled':True,'address':'127.0.0.1:19996'}).status_code,200)
             mtx.assert_called_once_with('config/global/patch',{'playback':True,'playbackAddress':'127.0.0.1:19996'})
@@ -711,7 +794,8 @@ class ExpansionTests(unittest.TestCase):
             with self.client.session_transaction() as session:session['version']=1
             other=app.app.test_client()
             with other.session_transaction() as session:session.update(uid=UID,version=1,csrf='other')
-            self.assertEqual(self.post('/api/password',{'current':'wrong','password':changed}).status_code,400)
+            response = self.post('/api/password',{'current':'wrong','password':changed})
+            self.assertEqual(response.status_code,400,response.json)
             self.assertEqual(self.post('/api/password',{'current':current,'password':changed}).status_code,200)
             self.assertEqual(self.client.get('/api/status').status_code,200)
             self.assertEqual(other.get('/api/status').status_code,401)
@@ -766,3 +850,712 @@ class ExpansionTests(unittest.TestCase):
         with patch.dict(os.environ,{'STREAMDESK_ENGINE':'1'}),patch.object(app,'mtx',side_effect=app.Error('temporarily offline')):
             app.initialize()
         self.assertIn('source3',[row['key'] for row in app.MODEL.sources(self.user)])
+
+
+class AutomationTests(unittest.TestCase):
+    def setUp(self):
+        self.client=app.app.test_client()
+        with self.client.session_transaction() as session:
+            session.update(uid=UID,version=1,csrf='automation',expert_mode=True)
+        self.headers={'X-CSRF-Token':'automation'}
+        self.feature=app.FEATURES.automation
+        for table in ('automation_hooks','scheduled_jobs','export_targets','exported_media'):
+            app.write('DELETE FROM '+table+' WHERE user_id=?',(UID,))
+
+    def post(self,path,body):
+        return self.client.post(path,json=body,headers=self.headers)
+
+    def test_allowlisted_hook_has_minimal_environment_and_scheduler_survives_polling(self):
+        self.feature.commands={'notify':['/usr/bin/true']}
+        self.assertEqual(self.post('/api/automation/hooks',{'event':'publish','action_name':'missing'}).status_code,400)
+        self.assertEqual(self.post('/api/automation/hooks',{'event':'publish','action_name':'notify'}).status_code,200)
+        user=app.rows('SELECT * FROM users WHERE id=?',(UID,))[0]
+        with patch('automation_features.subprocess.run') as run:
+            self.feature.run_hook(user,'publish','notify')
+        environment=run.call_args.kwargs['env']
+        self.assertEqual(set(environment),{'PATH','STREAMDESK_EVENT','STREAMDESK_USER_ID','STREAMDESK_USERNAME'})
+        job=self.post('/api/automation/jobs',{'kind':'record_stop','payload':{},'run_at':app.time.time()}).json['id']
+        self.feature.last_tick=0
+        with patch.object(app.ENGINE,'stop_record') as stop:
+            self.feature.run_scheduled()
+        stop.assert_called_once_with(UID,'Zeitplan beendet.')
+        self.assertEqual(app.rows('SELECT status FROM scheduled_jobs WHERE id=?',(job,))[0]['status'],'done')
+
+    def test_export_configuration_rejects_private_targets_and_keeps_password(self):
+        with patch.object(app,'validate_public_http',side_effect=app.Error('blocked')):
+            self.assertEqual(self.post('/api/automation/export',{'enabled':True,'url':'https://127.0.0.1/','username':'a','password':'b'}).status_code,400)
+        with patch.object(app,'validate_public_http',return_value='https://export.example/'):
+            self.assertEqual(self.post('/api/automation/export',{'enabled':True,'url':'https://export.example/','username':'alice','password':'secret'}).status_code,200)
+            self.assertEqual(self.post('/api/automation/export',{'enabled':True,'url':'https://export.example/','username':'alice','password':''}).status_code,200)
+        row=app.rows('SELECT * FROM export_targets WHERE user_id=?',(UID,))[0]
+        self.assertEqual(app.decrypt(row['password']),'secret')
+
+
+class BuildDTests(unittest.TestCase):
+    def setUp(self):
+        self.client=app.app.test_client()
+        with self.client.session_transaction() as session:
+            session.update(uid=UID,version=app.rows('SELECT version FROM users WHERE id=?',(UID,))[0]['version'],
+                           csrf='build-d',expert_mode=True)
+        self.headers={'X-CSRF-Token':'build-d'}
+        self.user=app.rows('SELECT * FROM users WHERE id=?',(UID,))[0]
+        self.outputs=app.rows('SELECT * FROM outputs WHERE user_id=?',(UID,))
+        self.routes=app.rows('SELECT * FROM output_routing WHERE user_id=?',(UID,))
+        self.addCleanup(self.restore)
+        for table in ('scenes','webauthn_credentials','recovery_codes','discord_auth'):
+            app.write('DELETE FROM '+table+' WHERE user_id=?',(UID,))
+        app.write("UPDATE users SET role='user',admin=0,chat_owner_id=NULL,language='de' WHERE id=?",(UID,))
+
+    def restore(self):
+        app.write('UPDATE users SET role=?,admin=?,chat_owner_id=?,language=?,version=? WHERE id=?',
+                  tuple(self.user[key] for key in ('role','admin','chat_owner_id','language','version'))+(UID,))
+        app.write('DELETE FROM outputs WHERE user_id=?',(UID,))
+        for row in self.outputs:
+            app.write('INSERT INTO outputs(user_id,kind,endpoint,selected,label) VALUES (?,?,?,?,?)',
+                      tuple(row[key] for key in ('user_id','kind','endpoint','selected','label')))
+        app.write('DELETE FROM output_routing WHERE user_id=?',(UID,))
+        for row in self.routes:
+            app.write('INSERT INTO output_routing(user_id,kind,sources) VALUES (?,?,?)',
+                      (row['user_id'],row['kind'],row['sources']))
+
+    def post(self,path,body):
+        return self.client.post(path,json=body,headers=self.headers)
+
+    def test_language_and_scene_are_tenant_scoped_and_apply_only_stopped(self):
+        self.assertEqual(self.post('/api/preferences',{'language':'en'}).status_code,200)
+        self.assertEqual(app.rows('SELECT language FROM users WHERE id=?',(UID,))[0]['language'],'en')
+        app.write('INSERT OR REPLACE INTO outputs(user_id,kind,endpoint,selected) VALUES (?,?,?,0)',
+                  (UID,'twitch',app.encrypt('rtmps://example.invalid/live')))
+        response=self.post('/api/scenes',{'name':'Live','sources':['source1'],'video_id':None,'targets':['twitch']})
+        self.assertEqual(response.status_code,200,response.json)
+        ident=response.json['id']
+        with patch.object(app,'configured_forwards',return_value={'fixture':['active']}):
+            self.assertEqual(self.post('/api/scenes/'+str(ident)+'/apply',{}).status_code,400)
+        with patch.object(app,'configured_forwards',return_value={}),patch.object(app,'reconcile'):
+            self.assertEqual(self.post('/api/scenes/'+str(ident)+'/apply',{}).status_code,200)
+        self.assertEqual(app.MODEL.route(app.rows('SELECT * FROM users WHERE id=?',(UID,))[0],'twitch'),['source1'])
+
+    def test_moderator_can_only_use_assigned_chat(self):
+        app.write("UPDATE users SET role='moderator',chat_owner_id=?,version=version+1 WHERE id=?",(OTHER,UID))
+        version=app.rows('SELECT version FROM users WHERE id=?',(UID,))[0]['version']
+        with self.client.session_transaction() as session:
+            session.update(uid=UID,version=version,csrf='build-d')
+        self.assertEqual(self.client.get('/').status_code,200)
+        self.assertIn('Moderation',self.client.get('/').get_data(as_text=True))
+        self.assertEqual(self.client.get('/api/status').status_code,403)
+        with patch.object(app.CHAT,'read',return_value={'messages':[]}) as read:
+            self.assertEqual(self.client.get('/api/chat').status_code,200)
+            self.assertEqual(read.call_args.args[0]['id'],OTHER)
+
+    def test_recovery_code_is_single_use(self):
+        feature=app.FEATURES.build_d
+        code='ABCDEF1234'
+        app.write('INSERT INTO recovery_codes(user_id,code_hash) VALUES (?,?)',(UID,feature.recovery_hash(UID,code)))
+        client=app.app.test_client()
+        client.get('/login')
+        with client.session_transaction() as session:token=session['csrf']
+        headers={'X-CSRF-Token':token}
+        self.assertEqual(client.post('/api/recovery/login',json={'username':'alice','code':code},headers=headers).status_code,200)
+        client.get('/login')
+        with client.session_transaction() as session:token=session['csrf']
+        self.assertEqual(client.post('/api/recovery/login',json={'username':'alice','code':code},
+                                     headers={'X-CSRF-Token':token}).status_code,401)
+
+    def test_discord_credentials_are_encrypted(self):
+        with patch.object(app.CHAT,'discord_api',return_value={'id':'123456789012345678','type':0,'name':'Studio'}):
+            response=self.post('/api/discord',{'channel_id':'123456789012345678','bot_token':'x'*40})
+        self.assertEqual(response.status_code,200,response.json)
+        row=app.rows('SELECT * FROM discord_auth WHERE user_id=?',(UID,))[0]
+        self.assertNotEqual(row['bot_token'],'x'*40)
+        self.assertEqual(app.decrypt(row['bot_token']),'x'*40)
+
+
+class ReviewTests(unittest.TestCase):
+    """Regressions found while reviewing the post-rc.6 additions."""
+    def setUp(self):
+        import sqlite3
+        self.backup = sqlite3.connect(':memory:')
+        with app.db() as connection:
+            connection.backup(self.backup)
+        config = app.CONFIG.read_text()
+        attempts = dict(app.ATTEMPTS)
+        self.addCleanup(self.restore, config, attempts)
+        app.ATTEMPTS.clear()
+        app.write("UPDATE users SET role='user',admin=0,chat_owner_id=NULL WHERE id=?", (UID,))
+        app.write('DELETE FROM routing_policy WHERE user_id=?', (UID,))
+        self.user = app.rows('SELECT * FROM users WHERE id=?', (UID,))[0]
+        self.client = app.app.test_client()
+        with self.client.session_transaction() as session:
+            session.update(uid=UID,version=self.user['version'],csrf='review',expert_mode=True)
+        self.headers = {'X-CSRF-Token':'review'}
+
+    def restore(self, config, attempts):
+        with app.db() as connection:
+            self.backup.backup(connection)
+        self.backup.close()
+        app.CONFIG.write_text(config)
+        app.ATTEMPTS.clear();app.ATTEMPTS.update(attempts)
+
+    def post(self, path, body):
+        return self.client.post(path, json=body, headers=self.headers)
+
+    def test_scenes_cannot_bypass_expert_mode_or_recording_guard(self):
+        response = self.post('/api/scenes', {'name':'Review','sources':['source1'],'targets':['twitch']})
+        self.assertEqual(response.status_code,200,response.json)
+        ident=response.json['id']
+        with self.client.session_transaction() as session:session['expert_mode']=False
+        self.assertEqual(self.post('/api/scenes',{'name':'Other','sources':['source1'],'targets':[]}).status_code,403)
+        self.assertEqual(self.post('/api/scenes/'+str(ident)+'/apply',{}).status_code,403)
+        with self.client.session_transaction() as session:session['expert_mode']=True
+        before=app.MODEL.route(self.user,'twitch')
+        with patch.object(app,'configured_forwards',return_value={}),patch.object(app.FEATURES.routing,'record_guard',side_effect=app.Error('Recording',http_status=409)):
+            self.assertEqual(self.post('/api/scenes/'+str(ident)+'/apply',{}).status_code,409)
+        self.assertEqual(app.MODEL.route(self.user,'twitch'),before)
+
+    def test_malformed_scene_arrays_are_validation_errors(self):
+        for sources,targets in (([{}],[]),(['source1'],[{}])):
+            self.assertEqual(self.post('/api/scenes',{'name':'Bad','sources':sources,'targets':targets}).status_code,400)
+
+    def passkey_registration(self, verified=True):
+        import base64
+        import cbor2
+        import hashlib
+        import json
+        from cryptography.hazmat.primitives.asymmetric import ec
+        encode=lambda data:base64.urlsafe_b64encode(data).rstrip(b'=').decode()
+        options=self.post('/api/passkeys/register/options',{}).json
+        key=ec.generate_private_key(ec.SECP256R1());public=key.public_key().public_numbers()
+        ident=b'review-credential-0123456789'
+        cose={1:2,3:-7,-1:1,-2:public.x.to_bytes(32,'big'),-3:public.y.to_bytes(32,'big')}
+        flags=0x45 if verified else 0x41
+        auth=hashlib.sha256(b'stream.example.com').digest()+bytes([flags])+b'\0'*4+b'\0'*16+len(ident).to_bytes(2,'big')+ident+cbor2.dumps(cose)
+        body={'credential_id':encode(ident),'client_data':encode(json.dumps({'type':'webauthn.create','challenge':options['challenge'],'origin':app.PUBLIC}).encode()),
+              'attestation_object':encode(cbor2.dumps({'fmt':'none','attStmt':{},'authData':auth})),'label':'Review device'}
+        return key,ident,body
+
+    def test_passkey_registration_and_login_are_verified_and_single_use(self):
+        import base64
+        import hashlib
+        import json
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import ec
+        encode=lambda data:base64.urlsafe_b64encode(data).rstrip(b'=').decode()
+        key,ident,body=self.passkey_registration()
+        response=self.post('/api/passkeys/register',body)
+        self.assertEqual(response.status_code,200,response.json)
+        self.assertEqual(len(response.json['recovery_codes']),10)
+        options=self.post('/api/passkeys/login/options',{'username':'alice'}).json
+        cookie=self.client.get_cookie('session').value
+        client_data=json.dumps({'type':'webauthn.get','challenge':options['challenge'],'origin':app.PUBLIC}).encode()
+        auth=hashlib.sha256(b'stream.example.com').digest()+b'\x05'+b'\0'*4
+        signature=key.sign(auth+hashlib.sha256(client_data).digest(),ec.ECDSA(hashes.SHA256()))
+        assertion={'credential_id':encode(ident),'client_data':encode(client_data),'authenticator_data':encode(auth),'signature':encode(signature)}
+        response=self.post('/api/passkeys/login',assertion)
+        self.assertEqual(response.status_code,200,response.json)
+        self.assertEqual(self.client.get('/api/status').status_code,200)
+        self.client.set_cookie('session',cookie)
+        self.assertEqual(self.post('/api/passkeys/login',assertion).status_code,400)
+
+    def test_passkey_requires_verification_and_rejects_forged_registration(self):
+        _,_,body=self.passkey_registration(verified=False)
+        self.assertEqual(self.post('/api/passkeys/register',body).status_code,400)
+        self.post('/api/passkeys/register/options',{})
+        self.assertEqual(self.post('/api/passkeys/register',{'algorithm':'invalid','credential_id':'!!!!','public_key':'!!!!'}).status_code,400)
+
+    def test_passkey_and_recovery_login_share_rate_limit(self):
+        for _ in range(10):
+            self.assertEqual(self.post('/api/recovery/login',{'username':'alice','code':'INVALID'}).status_code,401)
+        self.assertEqual(self.post('/api/recovery/login',{'username':'alice','code':'INVALID'}).status_code,429)
+        self.assertEqual(self.post('/api/passkeys/login/options',{'username':'alice'}).status_code,429)
+
+    def test_background_export_cannot_hold_up_engine_tick(self):
+        import threading
+        import time
+        feature=app.FEATURES.automation
+        entered,release=threading.Event(),threading.Event()
+        def slow():
+            entered.set();release.wait(5)
+        try:
+            with patch.object(feature,'export_ready',side_effect=slow),patch.object(feature,'run_scheduled'):
+                feature.last_tick=0;feature.last_export=0
+                started=time.monotonic();feature.tick()
+                self.assertLess(time.monotonic()-started,.5)
+                self.assertTrue(entered.wait(2))
+                feature.last_tick=0;feature.tick()
+                self.assertEqual(len(feature.workers),2)
+        finally:
+            release.set()
+            for worker in feature.workers.values():worker.join(3)
+            feature.workers.clear()
+
+    def test_export_streams_files_and_backs_off_on_failure(self):
+        from contextlib import contextmanager
+        feature=app.FEATURES.automation
+        path=app.DATA/'review-export.mp4';path.write_bytes(b'fixture'*1000);self.addCleanup(path.unlink,missing_ok=True)
+        app.write("INSERT INTO recordings(user_id,name,path,source,status,started) VALUES (?,?,?,'live','ready',0)",(UID,'Review',str(path)))
+        app.write('INSERT OR REPLACE INTO export_targets(user_id,url,username,password,enabled) VALUES (?,?,?,?,1)',(UID,app.encrypt('https://export.example/'),app.encrypt('u'),app.encrypt('p')))
+        received=[]
+        @contextmanager
+        def upload(url,**kwargs):
+            self.assertTrue(hasattr(kwargs['data'],'read'))
+            received.append(kwargs['data'].read())
+            raise OSError('offline')
+            yield
+        with patch.object(app,'validate_public_http'),patch.object(app,'public_https',side_effect=upload):
+            feature.export_ready();feature.export_ready()
+        self.assertEqual(received,[b'fixture'*1000])
+        row=app.rows('SELECT status,retry_at FROM exported_media WHERE user_id=? AND path=?',(UID,str(path)))[0]
+        self.assertEqual(row['status'],'error');self.assertGreater(row['retry_at'],app.time.time())
+        self.assertNotIn(UID,feature.busy_users)
+
+    def test_invalid_json_and_smtp_targets_fail_without_network(self):
+        for path in ('/api/automation/jobs','/api/automation/hooks','/api/notifications'):
+            self.assertEqual(self.post(path,[]).status_code,400)
+        base={'enabled':True,'email':'a@example.com','smtp_host':'127.0.0.1','smtp_port':465}
+        with patch.object(app,'resolve_host_ips',return_value={'127.0.0.1'}):
+            self.assertEqual(self.post('/api/notifications',base).status_code,400)
+        self.assertEqual(self.post('/api/notifications',dict(base,smtp_port=70000)).status_code,400)
+        self.assertEqual(self.post('/api/notifications',dict(base,email='a@example.com\r\nBcc: b@example.com')).status_code,400)
+
+    def test_on_demand_pull_is_started_for_program_consumer_and_stopped_afterwards(self):
+        from unittest.mock import MagicMock
+        with patch.object(app,'validate_output',return_value='rtsp://camera.example/live'):
+            created=self.post('/api/routing/sources',{'label':'On demand','protocol':'rtsp','url':'rtsp://camera.example/live','source_on_demand':True})
+        self.assertEqual(created.status_code,200,created.json)
+        key=created.json['key'];app.MODEL.save_route(self.user,'twitch',[key])
+        app.reconcile();config=yaml.safe_load(app.CONFIG.read_text());program=app.MODEL.output_program(self.user,'twitch')
+        engine=app.Engine();process=MagicMock();process.poll.return_value=None
+        with patch.object(app.subprocess,'Popen',return_value=process) as launch:
+            engine.demand_sources(self.user,app.MODEL.sources(self.user),{program['path']:{'readers':[{'id':'fixture'}]}},config,100)
+            self.assertEqual(launch.call_count,1)
+            engine.demand_sources(self.user,app.MODEL.sources(self.user),{},config,101)
+            process.terminate.assert_called_once()
+            self.assertFalse(engine.source_probes)
+
+    def test_live_browser_overlay_is_not_reported_as_offline_and_failure_falls_back(self):
+        from unittest.mock import MagicMock
+        engine=app.Engine();program=app.MODEL.program(self.user,'main');process=MagicMock();process.poll.return_value=None
+        config=yaml.safe_load(app.CONFIG.read_text());path=self.user['prefix']+'source1'
+        all_paths={program['path']:{'online':True,'available':True,'readers':[{}]}}
+        with patch.object(engine,'start_browser',return_value=process):
+            state=engine.program_tick(self.user,program,[path],all_paths,config,False,100,'https://overlay.example/',app.MODEL.policy(self.user))
+        self.assertEqual(state['selected_source'],'source1');self.assertFalse(state['offline_playing'])
+        process.poll.return_value=1
+        fallback=MagicMock();fallback.poll.return_value=None
+        with patch.object(app.subprocess,'Popen',return_value=fallback):
+            state=engine.program_tick(self.user,program,[path],all_paths,config,False,101,'https://overlay.example/',app.MODEL.policy(self.user))
+        self.assertEqual(engine.relays[UID][0],path)
+
+    def test_proxy_protocol_change_never_reuses_unvalidated_previous_endpoint(self):
+        created=self.post('/api/routing/sources',{'label':'Camera','protocol':'srt'})
+        self.assertEqual(created.status_code,200)
+        with patch.object(app,'validate_output',side_effect=app.Error('Address required')) as check:
+            response=self.post('/api/routing/sources/'+created.json['key'],{'protocol':'proxy'})
+        self.assertEqual(response.status_code,400);check.assert_called_once_with('')
+
+    def test_admin_deletion_removes_all_new_tenant_data_and_archives_clips(self):
+        with patch.object(app.threading,'Thread'):
+            uid=app.add_user('reviewdelete','Review-Deletion-Password-123')
+        app.write('UPDATE users SET admin=1 WHERE id=?',(UID,))
+        app.write('UPDATE users SET active=0 WHERE id=?',(uid,))
+        folder=app.DATA/'clips'/'reviewdelete';folder.mkdir(parents=True)
+        path=folder/'clip.mp4';path.write_bytes(b'private-clip')
+        app.write("INSERT INTO clips(user_id,name,path,source,start,duration,size,created) VALUES (?,?,?,'live','2026-01-01T00:00:00Z',1,12,0)",(uid,'Review',str(path)))
+        app.write("INSERT INTO scheduled_jobs(user_id,kind,payload,run_at) VALUES (?,'output_start','{}',0)",(uid,))
+        app.write("INSERT INTO notification_settings(user_id,webhook) VALUES (?,?)",(uid,app.encrypt('https://example.com/hook')))
+        app.write('INSERT INTO routing_policy(user_id) VALUES (?)',(uid,))
+        with patch.object(app,'mtx',return_value={}):
+            response=self.post('/api/admin/users/'+str(uid)+'/delete',{'confirm':'reviewdelete'})
+        self.assertEqual(response.status_code,200,response.json)
+        for table in ('clips','scheduled_jobs','notification_settings','routing_policy'):
+            self.assertFalse(app.rows('SELECT * FROM '+table+' WHERE user_id=?',(uid,)))
+        self.assertFalse(folder.exists())
+        self.assertTrue(list((app.DATA/'clips').glob('.deleted-reviewdelete-*')))
+
+    def test_youtube_stream_consumes_grpc_messages_after_discord_extension(self):
+        import grpc
+        import stream_list_pb2 as proto
+        import stream_list_pb2_grpc as service
+        import threading
+        from unittest.mock import MagicMock
+        response=proto.LiveChatMessageListResponse(next_page_token='next-fixture')
+        item=response.items.add();item.id='message-1';item.snippet.display_message='Fixture message'
+        item.author_details.display_name='Fixture author';item.author_details.channel_id='fixture-channel'
+        call=MagicMock();call.__iter__.return_value=iter([response])
+        stub=MagicMock();stub.StreamList.return_value=call
+        with patch.object(app.CHAT,'youtube_token',return_value=('fixture',{'chat_id':'fixture-chat','broadcast_id':'fixture','expires':app.time.time()+3600})), \
+             patch.object(app.CHAT,'youtube_api',return_value={'items':[{'status':{'lifeCycleStatus':'live'}}]}), \
+             patch.object(grpc,'secure_channel'),patch.object(service,'V3DataLiveChatMessageServiceStub',return_value=stub), \
+             patch.object(app.CHAT,'interested',return_value=True),patch.object(app.CHAT,'add') as add,patch('integrations.threading.Thread'):
+            app.CHAT.youtube_stream(UID,threading.Event())
+        add.assert_called_once()
+        self.assertEqual(add.call_args.args[1:5],('youtube','message-1','Fixture author','Fixture message'))
+        self.assertEqual(app.CHAT.youtube_pages[(UID,'fixture-chat')],'next-fixture')
+        call.cancel.assert_called_once()
+
+    def test_discord_cursor_advances_past_bot_messages(self):
+        from unittest.mock import MagicMock
+        app.write('INSERT OR REPLACE INTO discord_auth(user_id,channel_id,channel_name,bot_token) VALUES (?,?,?,?)',
+                  (UID,'123456789012345678','Fixture',app.encrypt('fixture-bot-token')))
+        stop=MagicMock();stop.wait.return_value=False
+        pages=[[{'id':'123456789012345679','type':0,'author':{'bot':True}}],
+               [{'id':'123456789012345680','type':0,'author':{'username':'Human'},'content':'Hello'}]]
+        with patch.object(app.CHAT,'interested',side_effect=[True,True,False]),patch.object(app.CHAT,'discord_api',side_effect=pages) as fetch,patch.object(app.CHAT,'add') as add:
+            app.CHAT.discord_stream(UID,stop)
+        self.assertIn('after=123456789012345679',fetch.call_args_list[1].args[1])
+        add.assert_called_once()
+
+    def test_native_standby_copy_is_shared_without_exposing_private_data_root(self):
+        with tempfile.TemporaryDirectory(dir=BASE) as temporary,patch.dict(os.environ,{'STREAMDESK_NATIVE_ROOT':temporary}):
+            path=Path(app.native_standby_file(self.user))
+            self.assertEqual(path.read_bytes(),Path(self.user['offline']).read_bytes())
+            self.assertEqual(path.stat().st_mode & 0o777,0o640)
+            self.assertFalse(path.is_relative_to(app.DATA))
+
+    def test_batch_routing_cannot_orphan_a_recorded_program(self):
+        for kind in ('twitch','youtube'):
+            app.MODEL.save_route(self.user,kind,['source1'])
+        program=app.MODEL.output_program(self.user,'twitch')
+        app.write("INSERT INTO recordings(user_id,name,path,source,status,started) VALUES (?,?,?,?,'recording',0)",
+                  (UID,'Guard','/fixture/unused.mp4',program['id']))
+        with self.assertRaises(app.Error):
+            app.FEATURES.routing.record_guard(self.user,'twitch',['source2'],{'twitch':['source2'],'youtube':['source2']})
+        app.FEATURES.routing.record_guard(self.user,'twitch',['source2'])
+
+    def test_udp_protocol_change_requires_matching_url_and_ports_are_exclusive(self):
+        created=self.post('/api/routing/sources',{'label':'UDP one','protocol':'mpegts','url':'udp+mpegts://0.0.0.0:12098?source=1.1.1.1'})
+        self.assertEqual(created.status_code,200,created.json)
+        duplicate=self.post('/api/routing/sources',{'label':'UDP two','protocol':'mpegts','url':'udp+mpegts://0.0.0.0:12098?source=1.0.0.1'})
+        self.assertEqual(duplicate.status_code,409)
+        key=created.json['key']
+        self.assertEqual(self.post('/api/routing/sources/'+key,{'protocol':'rtp'}).status_code,400)
+        self.assertEqual(app.MODEL.source(self.user,key)['protocol'],'mpegts')
+
+    def test_remote_native_features_require_shared_storage(self):
+        with patch.dict(os.environ,{'STREAMDESK_MEDIAMTX_MODE':'remote-api','STREAMDESK_NATIVE_SHARED':'0'}):
+            response=self.post('/api/native-recording',{'source':'source1','enabled':True})
+            self.assertEqual(response.status_code,409,response.json)
+            response=self.post('/api/routing/policy',{'healthy_seconds':3,'stall_seconds':5,'retry_seconds':10,'native_standby':True})
+            self.assertEqual(response.status_code,409,response.json)
+
+    def test_clip_conversion_capacity_is_bounded(self):
+        slots=app.FEATURES.playback.remux_slots
+        self.assertTrue(slots.acquire(blocking=False));self.assertTrue(slots.acquire(blocking=False))
+        try:
+            result=self.post('/api/clips',{'source':'source1','start':'2026-10-27T12:00:00Z','duration':1,'name':'Bounded'})
+            self.assertEqual(result.status_code,429,result.json)
+            self.assertFalse(app.FEATURES.playback.active_clips)
+        finally:
+            slots.release();slots.release()
+
+    def test_moderator_role_cannot_own_itself_and_retains_own_password_change(self):
+        app.write('UPDATE users SET admin=1 WHERE id=?',(UID,))
+        result=self.post('/api/admin/users/'+str(OTHER)+'/role',{'role':'moderator','chat_owner_id':OTHER})
+        self.assertEqual(result.status_code,409,result.json)
+        with patch.object(app,'mtx',return_value={}):
+            result=self.post('/api/admin/users/'+str(OTHER)+'/role',{'role':'moderator','chat_owner_id':UID})
+        self.assertEqual(result.status_code,200,result.json)
+        user=app.rows('SELECT * FROM users WHERE id=?',(OTHER,))[0]
+        config=yaml.safe_load(app.CONFIG.read_text())
+        self.assertFalse(any(row['user']==app.media_username(user) for row in config['authInternalUsers']))
+        app.write('UPDATE users SET password=? WHERE id=?',(app.generate_password_hash('Moderator-Fixture-Password-123'),OTHER))
+        client=app.app.test_client()
+        with client.session_transaction() as session:session.update(uid=OTHER,version=user['version'],csrf='moderator')
+        result=client.post('/api/password',json={'current':'Moderator-Fixture-Password-123','password':'New-Moderator-Password-456'},headers={'X-CSRF-Token':'moderator'})
+        self.assertEqual(result.status_code,200,result.json)
+        self.assertEqual(client.get('/api/status').status_code,403)
+
+    def test_idle_static_source_is_not_displayed_as_receiving_media(self):
+        with patch.object(app,'validate_output',return_value='rtsp://camera.example/live'):
+            created=self.post('/api/routing/sources',{'label':'Idle camera','protocol':'rtsp','url':'rtsp://camera.example/live','source_on_demand':True})
+        key=created.json['key']
+        engine=app.Engine()
+        path={'name':self.user['prefix']+key,'online':True,'available':False,'inboundBytes':0,'tracks':[]}
+        with patch.object(app,'mtx',return_value={'items':[path]}),patch.object(app.FEATURES.automation,'tick'),patch.object(app.FEATURES.notifications,'observe'):
+            engine.tick()
+        source=next(row for row in engine.snapshot[UID]['sources'] if row['key']==key)
+        self.assertEqual(source['state'],'offline')
+
+    def test_readiness_requires_a_connected_live_engine(self):
+        from unittest.mock import MagicMock
+        thread=MagicMock()
+        with patch.object(app.ENGINE,'thread',thread),patch.object(app.READY,'is_set',return_value=True):
+            thread.is_alive.return_value=False
+            self.assertEqual(self.client.get('/healthz').status_code,503)
+            thread.is_alive.return_value=True
+            self.assertEqual(self.client.get('/healthz').status_code,200)
+
+    def test_strict_rtmp_returns_the_actual_encrypted_listener(self):
+        config=yaml.safe_load(app.CONFIG.read_text());config.update(rtmpEncryption='strict',rtmpsAddress=':11936')
+        app.CONFIG.write_text(yaml.safe_dump(config))
+        data=self.client.get('/api/ingest/source1').json
+        self.assertTrue(data['rtmp'].startswith('rtmps://127.0.0.1:11936/'))
+
+    def test_discord_nonce_fits_provider_limit_and_retries_are_idempotent(self):
+        old_nonces=dict(app.CHAT.nonces);old_sent=dict(app.CHAT.sent_at)
+        def restore():
+            app.CHAT.nonces.clear();app.CHAT.nonces.update(old_nonces)
+            app.CHAT.sent_at.clear();app.CHAT.sent_at.update(old_sent)
+        self.addCleanup(restore)
+        app.CHAT.sent_at[UID]=0
+        app.write('INSERT OR REPLACE INTO discord_auth(user_id,channel_id,channel_name,bot_token) VALUES (?,?,?,?)',
+                  (UID,'123456789012345678','Fixture',app.encrypt('fixture-token')))
+        body={'message':'Fixture message','targets':['discord'],'nonce':'review_message_0123456789abcdef0123456789abcdef'}
+        with patch.object(app.CHAT,'info',return_value={'discord_ready':True}),patch.object(app.CHAT,'discord_api',return_value={'id':'1234','author':{'username':'Fixture'}}) as send,patch.object(app.CHAT,'add'):
+            first=app.CHAT.send(self.user,body)
+            self.assertEqual(app.CHAT.send(self.user,body),first)
+        self.assertEqual(send.call_count,1)
+        self.assertLessEqual(len(send.call_args.args[2]['nonce']),25)
+
+    def test_discord_setup_requires_expert_but_existing_chat_remains_available(self):
+        with self.client.session_transaction() as session:session['expert_mode']=False
+        for operation,path in (('get','/api/discord'),('post','/api/discord'),('post','/api/discord/disconnect')):
+            response=getattr(self.client,operation)(path,**({'json':{},'headers':self.headers} if operation=='post' else {}))
+            self.assertEqual(response.status_code,403)
+        with patch.object(app.CHAT,'read',return_value={'messages':[]}):
+            self.assertEqual(self.client.get('/api/chat').status_code,200)
+        with self.client.session_transaction() as session:session['expert_mode']=True
+        self.assertEqual(self.client.get('/api/discord').status_code,200)
+        self.assertEqual(self.client.post('/api/discord',json={}).status_code,403)
+
+    def test_discord_setup_status_is_private_and_never_returns_bot_token(self):
+        app.write('INSERT OR REPLACE INTO discord_auth(user_id,channel_id,channel_name,bot_token) VALUES (?,?,?,?)',
+                  (UID,'123456789012345678','Own studio',app.encrypt('private-review-token')))
+        app.write('INSERT OR REPLACE INTO discord_auth(user_id,channel_id,channel_name,bot_token) VALUES (?,?,?,?)',
+                  (OTHER,'987654321098765432','Other studio',app.encrypt('foreign-review-token')))
+        data=self.client.get('/api/discord')
+        self.assertEqual(data.json,{'connected':True,'channel_id':'123456789012345678','channel_name':'Own studio'})
+        self.assertNotIn('token',data.get_data(as_text=True))
+        self.assertNotIn('Other studio',data.get_data(as_text=True))
+
+    def test_release_version_is_shared_by_api_ui_and_static_assets(self):
+        expected=(ROOT/'VERSION').read_text().strip()
+        self.assertEqual(app.APP_VERSION,expected)
+        self.assertEqual(self.client.get('/api/status').json['app_version'],expected)
+        html=self.client.get('/').get_data(as_text=True)
+        self.assertIn('v'+expected,html)
+        self.assertIn('/static/discord.js?v='+expected,html)
+
+
+class ServicePolicyTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        with patch.object(app.threading, 'Thread'):
+            cls.admin_id = app.add_user('services_admin', 'Services-Fixture-Password-123', admin=True)
+            cls.user_id = app.add_user('services_user', 'Services-Fixture-Password-456')
+
+    def setUp(self):
+        import json
+        self.json = json
+        self.config = app.CONFIG.read_text()
+        self.saved = app.rows("SELECT * FROM settings WHERE name IN ('service_policy','service_paused_recordings')")
+        self.pending = app.SERVICES.pending_runtime
+        app.write("DELETE FROM settings WHERE name IN ('service_policy','service_paused_recordings')")
+        self.admin = app.app.test_client()
+        self.client = app.app.test_client()
+        for client, uid in ((self.admin,self.admin_id),(self.client,self.user_id)):
+            with client.session_transaction() as session:
+                session.update(uid=uid,version=1,csrf='services',expert_mode=True)
+        self.headers = {'X-CSRF-Token':'services'}
+        self.user = app.rows('SELECT * FROM users WHERE id=?',(self.user_id,))[0]
+        app.reconcile()
+
+    def tearDown(self):
+        app.CONFIG.write_text(self.config)
+        app.write("DELETE FROM settings WHERE name IN ('service_policy','service_paused_recordings')")
+        for row in self.saved:
+            app.write('INSERT INTO settings(name,value) VALUES (?,?)',(row['name'],row['value']))
+        for table in ('outputs','discord_auth','scheduled_jobs','viewer_links'):
+            app.write('DELETE FROM '+table+' WHERE user_id IN (?,?)',(self.admin_id,self.user_id))
+        app.write("UPDATE users SET output='',output_kind='twitch' WHERE id IN (?,?)",(self.admin_id,self.user_id))
+        app.SERVICES.pending_runtime = self.pending
+        app.CHAT.prune(set())
+
+    def toggle(self, key, enabled):
+        response = self.admin.post('/api/admin/services',json={'id':key,'enabled':enabled},headers=self.headers)
+        self.assertEqual(response.status_code,200,response.get_data(as_text=True))
+        return response.json
+
+    def test_only_admin_can_change_global_services_without_expert_mode(self):
+        self.assertEqual(self.client.get('/api/admin/services').status_code,403)
+        self.assertEqual(self.client.post('/api/admin/services',json={'id':'discord','enabled':False},headers=self.headers).status_code,403)
+        self.assertEqual(self.admin.post('/api/admin/services',json={'id':'discord','enabled':False}).status_code,403)
+        with self.admin.session_transaction() as session:session['expert_mode']=False
+        self.toggle('discord',False)
+        self.assertFalse(self.client.get('/api/status').json['services']['discord'])
+        self.assertIn('admin-service-list',self.admin.get('/').get_data(as_text=True))
+        self.assertNotIn('admin-service-list',self.client.get('/').get_data(as_text=True))
+        self.assertNotIn('bot_token',self.admin.get('/api/admin/services').get_data(as_text=True))
+
+    def test_defaults_persistence_and_invalid_changes(self):
+        self.assertTrue(all(app.SERVICES.flags().values()))
+        for body in ({'id':'unknown','enabled':False},{'id':'discord','enabled':'false'},
+                     {'id':'discord','enabled':0},{'id':'discord','enabled':False,'user_id':self.user_id}):
+            self.assertEqual(self.admin.post('/api/admin/services',json=body,headers=self.headers).status_code,400)
+        self.toggle('discord',False)
+        from service_policy import ServicePolicy
+        restarted = object.__new__(ServicePolicy);restarted.c=app
+        self.assertFalse(restarted.enabled('discord'))
+        self.assertTrue(restarted.enabled('twitch'))
+        self.toggle('discord',True)
+        self.assertTrue(restarted.enabled('discord'))
+
+    def test_discord_restriction_keeps_encrypted_credentials_and_chat_history(self):
+        token=app.encrypt('Fixture-Discord-Token-123456789012345')
+        app.write('INSERT INTO discord_auth(user_id,channel_id,channel_name,bot_token) VALUES (?,?,?,?)',
+                  (self.user_id,'123456789012345678','Fixture',token))
+        app.CHAT.add(self.user_id,'discord','fixture','Bot','Existing message')
+        self.toggle('discord',False)
+        for client in (self.admin,self.client):
+            self.assertEqual(client.get('/api/discord').status_code,403)
+            self.assertEqual(client.post('/api/discord/disconnect',json={},headers=self.headers).status_code,403)
+        with patch.object(app.threading,'Thread'),patch.object(app.CHAT,'discord_api') as remote:
+            chat=self.client.get('/api/chat').json
+            self.assertFalse(chat['discord_ready'])
+            self.assertFalse(chat['messages'])
+            self.assertEqual(self.client.post('/api/chat/send',json={'targets':['discord'],'message':'test','nonce':'fixture-nonce-1234'},headers=self.headers).status_code,403)
+            remote.assert_not_called()
+            self.toggle('discord',True)
+            self.assertTrue(self.client.get('/api/chat').json['discord_ready'])
+        self.assertEqual(app.rows('SELECT bot_token FROM discord_auth WHERE user_id=?',(self.user_id,))[0]['bot_token'],token)
+        self.assertEqual(len(app.CHAT.messages[self.user_id]),1)
+
+    def test_provider_suspension_keeps_keys_selection_and_other_outputs(self):
+        for kind in ('twitch','youtube'):
+            app.write('INSERT INTO outputs(user_id,kind,endpoint,selected) VALUES (?,?,?,1)',
+                      (self.user_id,kind,app.encrypt('rtmps://fixture.invalid/'+kind+'#Fixture-Key-123')))
+        original=app.rows('SELECT * FROM outputs WHERE user_id=?',(self.user_id,))
+        self.toggle('twitch',False)
+        with patch.object(app,'validate_output',side_effect=lambda value:value),patch.object(app,'mtx'):
+            with self.assertRaises(app.Error):app.forward(self.user,True,kind='twitch')
+            app.forward(self.user,True)
+        config=app.yaml.safe_load(app.CONFIG.read_text())
+        self.assertFalse(config['paths'][app.output_path(self.user,'twitch')]['forward'])
+        self.assertTrue(config['paths'][app.output_path(self.user,'youtube')]['forward'])
+        self.assertEqual(app.rows('SELECT * FROM outputs WHERE user_id=?',(self.user_id,)),original)
+        self.assertEqual(self.client.post('/api/output',json={'kind':'twitch','key':'fixture-stream-key-1234'},headers=self.headers).status_code,403)
+        self.assertEqual(self.client.post('/api/outputs/select',json={'kinds':['youtube']},headers=self.headers).status_code,200)
+        self.assertTrue(app.rows("SELECT selected FROM outputs WHERE user_id=? AND kind='twitch'",(self.user_id,))[0]['selected'])
+        self.toggle('twitch',True)
+        self.assertFalse(app.yaml.safe_load(app.CONFIG.read_text())['paths'][app.output_path(self.user,'twitch')]['forward'])
+
+    def test_recording_pause_retains_native_settings_and_foreign_paths(self):
+        config=app.yaml.safe_load(app.CONFIG.read_text())
+        name=self.user['prefix']+'source1'
+        config['paths'][name].update(record=True,recordFormat='mpegts',recordSegmentDuration='1m',recordDeleteAfter='3d')
+        config['paths']['foreign']={'source':'publisher','record':True,'recordFormat':'fmp4'}
+        app.CONFIG.write_text(app.yaml.safe_dump(config))
+        with patch.dict(app.ENGINE.recorders,{self.user_id:(123,object())}),patch.object(app.ENGINE,'stop_record') as stop:
+            self.toggle('recording',False)
+            stop.assert_called_once_with(self.user_id,'Aufnahmedienst durch Administration gesperrt.')
+        paused=app.yaml.safe_load(app.CONFIG.read_text())
+        self.assertFalse(paused['paths'][name]['record'])
+        self.assertEqual(paused['paths'][name]['recordFormat'],'mpegts')
+        self.assertEqual(paused['paths']['foreign'],config['paths']['foreign'])
+        self.assertEqual(self.client.post('/api/recordings/start',json={'source':'live'},headers=self.headers).status_code,403)
+        self.toggle('recording',True)
+        resumed=app.yaml.safe_load(app.CONFIG.read_text())
+        self.assertTrue(resumed['paths'][name]['record'])
+        self.assertEqual(resumed['paths'][name]['recordDeleteAfter'],'3d')
+        self.assertEqual(resumed['paths']['foreign'],config['paths']['foreign'])
+
+    def test_paused_automation_does_not_consume_jobs_or_send_notifications(self):
+        overdue=app.write('INSERT INTO scheduled_jobs(user_id,kind,payload,run_at) VALUES (?,?,?,?)',
+                          (self.user_id,'record_start','{"source":"live"}',app.time.time()-10))
+        future=app.write('INSERT INTO scheduled_jobs(user_id,kind,payload,run_at) VALUES (?,?,?,?)',
+                         (self.user_id,'record_start','{"source":"live"}',app.time.time()+3600))
+        self.toggle('automation',False);self.toggle('notifications',False)
+        with patch.object(app,'start_recording') as record,patch.object(app.FEATURES.automation,'run_hook') as hook,patch.object(app.FEATURES.notifications,'public') as notify:
+            app.FEATURES.automation.run_scheduled();app.FEATURES.automation.export_ready()
+            app.FEATURES.automation.observe(self.user,[{'state':'online'}],[{'available':True}])
+            app.FEATURES.notifications.deliver(self.user,'offline')
+            record.assert_not_called();hook.assert_not_called();notify.assert_not_called()
+        self.assertEqual(app.rows('SELECT status FROM scheduled_jobs WHERE id=?',(overdue,))[0]['status'],'pending')
+        self.toggle('automation',True)
+        self.assertEqual(app.rows('SELECT status FROM scheduled_jobs WHERE id=?',(overdue,))[0]['status'],'error')
+        self.assertEqual(app.rows('SELECT status FROM scheduled_jobs WHERE id=?',(future,))[0]['status'],'pending')
+
+    def test_runtime_failure_keeps_policy_closed_and_retries(self):
+        with patch.object(app,'reconcile',side_effect=app.Error('Fixture unavailable')):
+            response=self.toggle('twitch',False)
+        self.assertTrue(response['runtime_pending'])
+        self.assertFalse(app.SERVICES.enabled('twitch'))
+        self.assertEqual(self.client.get('/oauth/twitch').status_code,403)
+        with patch.object(app,'reconcile',return_value=True):app.SERVICES.sync_runtime()
+        self.assertFalse(app.SERVICES.pending_runtime)
+
+    def test_existing_public_viewer_token_is_suspended_then_reusable(self):
+        result=self.client.post('/api/viewer-link',json={'enabled':True},headers=self.headers)
+        self.assertEqual(result.status_code,200)
+        path=urllib.parse.urlsplit(result.json['url']).path
+        stored=app.rows('SELECT * FROM viewer_links WHERE user_id=?',(self.user_id,))
+        self.toggle('viewers',False)
+        self.assertEqual(app.app.test_client().get(path).status_code,403)
+        self.assertEqual(app.rows('SELECT * FROM viewer_links WHERE user_id=?',(self.user_id,)),stored)
+        self.toggle('viewers',True)
+        self.assertEqual(app.app.test_client().get(path).status_code,200)
+
+    def test_all_optional_service_routes_are_blocked_even_for_experts(self):
+        cases={'webrtc':('/api/webrtc/ice','/webrtc/3/play/'),
+               'playback':('/api/playback/status','/api/clips'),
+               'advanced_routing':('/api/routing','/api/scenes'),
+               'automation':('/api/automation',),'notifications':('/api/notifications',),
+               'youtube':('/api/youtube/broadcasts','/oauth/youtube')}
+        for key,paths in cases.items():
+            self.toggle(key,False)
+            for path in paths:self.assertEqual(self.client.get(path).status_code,403,(key,path))
+        self.assertEqual(self.client.get('/api/ingest').status_code,200)
+        self.assertEqual(self.client.get('/program/main/').status_code,200)
+
+    def test_webrtc_suspension_closes_sessions_and_program_workers(self):
+        sessions=app.FEATURES.rtc_sessions
+        previous=dict(sessions);sessions['fixture']=(self.user_id,'csrf','http://localhost/fixture',app.time.monotonic())
+        try:
+            with patch.object(app.threading,'Thread') as worker,patch.object(app.FEATURES.program_preview,'close') as close:
+                self.toggle('webrtc',False)
+                self.assertFalse(sessions)
+                self.assertTrue(worker.called)
+                close.assert_called_once()
+            with patch.object(app.FEATURES.program_preview,'start') as start:
+                app.FEATURES.program_preview.monitor([self.user],{self.user['prefix']+'webrtc-program':{'readers':[{'id':'fixture'}]}})
+                start.assert_not_called()
+        finally:sessions.update(previous)
+
+    def test_nested_recording_and_routing_pauses_restore_only_after_both_are_enabled(self):
+        result=self.client.post('/api/routing/sources',json={'label':'Fixture camera','protocol':'rtmp'},headers=self.headers)
+        self.assertEqual(result.status_code,200)
+        key=result.json['key'];name=self.user['prefix']+key
+        config=app.yaml.safe_load(app.CONFIG.read_text());config['paths'][name]['record']=True
+        app.CONFIG.write_text(app.yaml.safe_dump(config))
+        try:
+            self.toggle('advanced_routing',False)
+            self.assertEqual(self.client.get('/api/ingest/'+key).status_code,403)
+            self.assertEqual([row['key'] for row in self.client.get('/api/ingest').json['sources']],['source1','source2'])
+            self.assertFalse(app.yaml.safe_load(app.CONFIG.read_text())['paths'][name]['record'])
+            self.toggle('recording',False)
+            self.toggle('advanced_routing',True)
+            self.assertFalse(app.yaml.safe_load(app.CONFIG.read_text())['paths'][name]['record'])
+            self.toggle('recording',True)
+            self.assertTrue(app.yaml.safe_load(app.CONFIG.read_text())['paths'][name]['record'])
+            self.assertEqual(self.client.get('/api/ingest/'+key).status_code,200)
+        finally:app.write('DELETE FROM routing_sources WHERE user_id=? AND key=?',(self.user_id,key))
+
+    def test_legacy_empty_prefix_does_not_mask_foreign_recordings(self):
+        app.write("UPDATE users SET prefix='' WHERE id=?",(self.user_id,))
+        try:
+            config=app.yaml.safe_load(app.CONFIG.read_text())
+            config['paths']['foreign']={'source':'publisher','record':True}
+            app.CONFIG.write_text(app.yaml.safe_dump(config))
+            self.toggle('recording',False)
+            self.assertTrue(app.yaml.safe_load(app.CONFIG.read_text())['paths']['foreign']['record'])
+            self.assertNotIn('foreign',self.json.loads(app.setting('service_paused_recordings','{}')))
+        finally:app.write('UPDATE users SET prefix=? WHERE id=?',(self.user['prefix'],self.user_id))
+
+    def test_corrupt_policy_fails_closed_but_admin_can_recover(self):
+        app.set_setting('service_policy','not-valid-json')
+        self.assertFalse(any(app.SERVICES.flags().values()))
+        self.assertEqual(self.client.get('/api/discord').status_code,403)
+        self.assertEqual(self.admin.get('/api/admin/services').status_code,200)
+        self.toggle('discord',True)
+        self.assertTrue(app.SERVICES.enabled('discord'))
+        self.assertFalse(app.SERVICES.enabled('youtube'))

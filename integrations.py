@@ -17,6 +17,10 @@ YOUTUBE_SCOPE = 'https://www.googleapis.com/auth/youtube.force-ssl'
 
 def install_integrations(core):
     app, login = core.app, core.login_required
+    with core.db() as connection:
+        connection.execute('''CREATE TABLE IF NOT EXISTS discord_auth(
+            user_id INTEGER PRIMARY KEY,channel_id TEXT NOT NULL,channel_name TEXT NOT NULL,
+            bot_token TEXT NOT NULL)''')
     hub = ChatHub(core)
 
     @app.post('/api/admin/google')
@@ -140,6 +144,41 @@ def install_integrations(core):
         hub.stop_platform(user['id'], 'twitch', clear=True)
         return jsonify(ok=True)
 
+    @app.get('/api/discord')
+    @login
+    @core.expert_required
+    def discord_status(user):
+        found=core.rows('SELECT channel_id,channel_name FROM discord_auth WHERE user_id=?',(user['id'],))
+        return jsonify(connected=bool(found),channel_id=found[0]['channel_id'] if found else '',
+                       channel_name=found[0]['channel_name'] if found else '')
+
+    @app.post('/api/discord')
+    @login
+    @core.expert_required
+    def discord_connect(user):
+        body = core.FEATURES.body()
+        channel = str(body.get('channel_id', '')).strip()
+        token = str(body.get('bot_token', '')).strip()
+        if not channel.isdigit() or not 15 <= len(channel) <= 25 or not 30 <= len(token) <= 200:
+            raise core.Error('Discord-Kanal-ID und Bot-Token prüfen.')
+        result = hub.discord_api(token, 'channels/' + channel)
+        if str(result.get('id')) != channel or result.get('type') not in (0, 5):
+            raise core.Error('Discord-Textkanal nicht gefunden.')
+        core.write('''INSERT INTO discord_auth(user_id,channel_id,channel_name,bot_token) VALUES (?,?,?,?)
+                      ON CONFLICT(user_id) DO UPDATE SET channel_id=excluded.channel_id,
+                      channel_name=excluded.channel_name,bot_token=excluded.bot_token''',
+                   (user['id'], channel, str(result.get('name', 'Discord'))[:100], core.encrypt(token)))
+        hub.stop_platform(user['id'], 'discord', clear=True)
+        return jsonify(ok=True)
+
+    @app.post('/api/discord/disconnect')
+    @login
+    @core.expert_required
+    def discord_disconnect(user):
+        core.write('DELETE FROM discord_auth WHERE user_id=?', (user['id'],))
+        hub.stop_platform(user['id'], 'discord', clear=True)
+        return jsonify(ok=True)
+
     @app.get('/api/chat')
     @login
     def chat_read(user):
@@ -204,9 +243,15 @@ class ChatHub:
         auth = self.c.rows('SELECT scopes FROM twitch_auth WHERE user_id=?', (user['id'],))
         twitch = bool(auth and self.c.CHAT_SCOPES.issubset(set(json.loads(auth[0]['scopes'] or '[]'))))
         youtube = self.c.rows('SELECT name,broadcast_id,chat_id FROM youtube_auth WHERE user_id=?', (user['id'],))
+        discord = self.c.rows('SELECT channel_name FROM discord_auth WHERE user_id=?', (user['id'],))
+        flags = self.c.SERVICES.flags()
+        twitch = twitch and flags['twitch']
+        youtube = youtube if flags['youtube'] else []
+        discord = discord if flags['discord'] else []
         return {'twitch_ready': twitch, 'youtube_connected': bool(youtube), 'youtube_name': youtube[0]['name'] if youtube else '',
                 'youtube_chat_ready': bool(youtube and youtube[0]['chat_id']), 'broadcast_id': youtube[0]['broadcast_id'] if youtube else '',
-                'google_ready': bool(self.c.setting('google_client_id') and self.c.setting('google_client_secret'))}
+                'google_ready': bool(self.c.setting('google_client_id') and self.c.setting('google_client_secret')),
+                'discord_ready': bool(discord), 'discord_name': discord[0]['channel_name'] if discord else ''}
 
     def interested(self, uid, stop):
         return not stop.is_set() and time.monotonic() - self.used.get(uid, 0) < 75
@@ -252,7 +297,8 @@ class ChatHub:
         info = self.info(user)
         with self.lock:
             self.used[uid] = time.monotonic()
-            for platform, ready in [('twitch', info['twitch_ready']), ('youtube', info['youtube_chat_ready'])]:
+            for platform, ready in [('twitch', info['twitch_ready']), ('youtube', info['youtube_chat_ready']),
+                                    ('discord', info['discord_ready'])]:
                 key = (uid, platform)
                 if ready and key not in self.workers:
                     stop = threading.Event()
@@ -260,9 +306,11 @@ class ChatHub:
                     threading.Thread(target=self.run, args=(uid, platform, stop), daemon=True).start()
                 elif not ready and key in self.workers:
                     self.stop_platform(uid, platform, clear=True)
-            return {'messages': list(self.messages.get(uid, [])), 'connections': {
+            return {'messages': [row for row in self.messages.get(uid, []) if self.c.SERVICES.enabled(row['platform'])], 'connections': {
                 'twitch': self.status.get((uid, 'twitch'), 'Verbinden …' if info['twitch_ready'] else 'Twitch für Chat erneut verbinden'),
-                'youtube': self.status.get((uid, 'youtube'), 'Verbinden …' if info['youtube_chat_ready'] else 'YouTube-Sendung für Chat auswählen' if info['youtube_connected'] else 'YouTube-Konto verbinden')}, **info}
+                'youtube': self.status.get((uid, 'youtube'), 'Verbinden …' if info['youtube_chat_ready'] else 'YouTube-Sendung für Chat auswählen' if info['youtube_connected'] else 'YouTube-Konto verbinden'),
+                'discord': self.status.get((uid, 'discord'), 'Verbinden …' if info['discord_ready'] else 'Discord-Bot verbinden'),
+                **{platform:'Durch Administration gesperrt' for platform in ('twitch','youtube','discord') if not self.c.SERVICES.enabled(platform)}}, **info}
 
     def add(self, uid, platform, ident, author, text, author_id='', published=''):
         if not ident or not text:
@@ -288,6 +336,8 @@ class ChatHub:
         delay = 5
         try:
             while self.interested(uid, stop):
+                if not self.c.SERVICES.enabled(platform):
+                    break
                 active = self.c.rows('SELECT active FROM users WHERE id=?', (uid,))
                 if not active or not active[0]['active']:
                     self.remove(uid, platform)
@@ -295,8 +345,10 @@ class ChatHub:
                 try:
                     if platform == 'twitch':
                         self.twitch_stream(uid, stop)
-                    else:
+                    elif platform == 'youtube':
                         self.youtube_stream(uid, stop)
+                    else:
+                        self.discord_stream(uid, stop)
                     delay = 5
                 except self.c.Error as exc:
                     self.set_status(uid, platform, str(exc), stop)
@@ -382,6 +434,7 @@ class ChatHub:
             pending_socket.close()
 
     def youtube_token(self, uid, force=False):
+        self.c.SERVICES.require('youtube')
         with self.c.OAUTH_LOCK:
             found = self.c.rows('SELECT * FROM youtube_auth WHERE user_id=?', (uid,))
             if not found:
@@ -450,6 +503,7 @@ class ChatHub:
                 while self.interested(uid, stop) and call.is_active():
                     stop.wait(5)
                 call.cancel()
+
             threading.Thread(target=cancel_idle, daemon=True).start()
             try:
                 for response in call:
@@ -480,14 +534,49 @@ class ChatHub:
             finally:
                 call.cancel()
 
+    def discord_api(self, token, path, body=None):
+        self.c.SERVICES.require('discord')
+        headers = {'Authorization': 'Bot ' + token, 'User-Agent': 'StreamDesk/' + self.c.APP_VERSION,
+                   'Content-Type': 'application/json'}
+        return self.c.remote('https://discord.com/api/v10/' + path,
+                             json.dumps(body).encode() if body is not None else None,
+                             headers, 'POST' if body is not None else 'GET')
+
+    def discord_stream(self, uid, stop):
+        found = self.c.rows('SELECT * FROM discord_auth WHERE user_id=?', (uid,))
+        if not found:
+            return
+        auth = found[0]
+        token = self.c.decrypt(auth['bot_token'])
+        after = ''
+        self.set_status(uid, 'discord', 'Verbunden', stop)
+        while self.interested(uid, stop):
+            query = '?limit=50' + ('&after=' + after if after else '')
+            messages = self.discord_api(token, 'channels/' + auth['channel_id'] + '/messages' + query)
+            if not isinstance(messages, list):
+                raise self.c.Error('Discord hat unerwartet geantwortet.')
+            for item in sorted(messages,key=lambda value:int(value['id']) if str(value.get('id','')).isdigit() else 0):
+                ident=str(item.get('id',''))
+                if not ident.isdigit():continue
+                if not after or int(ident)>int(after):after=ident
+                if item.get('type') not in (0, 19) or item.get('author', {}).get('bot'):
+                    continue
+                self.add(uid, 'discord', str(item.get('id', '')), item.get('author', {}).get('global_name')
+                         or item.get('author', {}).get('username', 'Discord'), item.get('content', ''),
+                         str(item.get('author', {}).get('id', '')), item.get('timestamp', ''))
+            if stop.wait(3):
+                break
+
     def send(self, user, body):
         uid = user['id']
         text = str(body.get('message', '')).strip()
         targets = body.get('targets', [])
         nonce = str(body.get('nonce', ''))
-        if not isinstance(targets, list) or not targets or any(t not in ('twitch', 'youtube') for t in targets):
-            raise self.c.Error('Bitte Twitch, YouTube oder beide Chats wählen.')
+        if not isinstance(targets, list) or not targets or any(t not in ('twitch', 'youtube', 'discord') for t in targets):
+            raise self.c.Error('Bitte mindestens einen verbundenen Chat wählen.')
         targets = sorted(set(targets))
+        for platform in targets:
+            self.c.SERVICES.require(platform)
         if not text or len(text) > (200 if 'youtube' in targets else 500) or any(ord(x) < 32 and x not in '\t' for x in text):
             raise self.c.Error('Bitte eine Nachricht mit maximal 200 Zeichen für YouTube bzw. 500 Zeichen für Twitch eingeben.')
         if not self.c.re.fullmatch(r'[A-Za-z0-9_-]{12,100}', nonce):
@@ -506,6 +595,8 @@ class ChatHub:
                 raise self.c.Error('Bitte Twitch zuerst für Chat erneut verbinden.')
             if 'youtube' in targets and not info['youtube_chat_ready']:
                 raise self.c.Error('Bitte zuerst deinen YouTube-Chat auswählen.')
+            if 'discord' in targets and not info['discord_ready']:
+                raise self.c.Error('Bitte zuerst Discord verbinden.')
             self.sent_at[uid] = time.monotonic()
             results = {}
             for target in targets:
@@ -518,11 +609,18 @@ class ChatHub:
                         if not response.get('is_sent'):
                             raise self.c.Error('Twitch hat die Nachricht nicht angenommen.')
                         self.add(uid, 'twitch', response['message_id'], user['twitch_name'] or user['username'], text, broadcaster)
-                    else:
+                    elif target == 'youtube':
                         auth = self.c.rows('SELECT chat_id,name,channel_id FROM youtube_auth WHERE user_id=?', (uid,))[0]
                         response = self.youtube_api(uid, 'liveChat/messages?part=snippet', {'snippet': {'liveChatId': auth['chat_id'],
                             'type': 'textMessageEvent', 'textMessageDetails': {'messageText': text}}})
                         self.add(uid, 'youtube', response['id'], auth['name'], text, auth['channel_id'])
+                    else:
+                        auth = self.c.rows('SELECT * FROM discord_auth WHERE user_id=?', (uid,))[0]
+                        response = self.discord_api(self.c.decrypt(auth['bot_token']),
+                                                    'channels/' + auth['channel_id'] + '/messages',
+                                                    {'content': text, 'nonce': hashlib.sha256((str(uid)+':'+nonce).encode()).hexdigest()[:24], 'enforce_nonce': True})
+                        self.add(uid, 'discord', str(response['id']), response.get('author', {}).get('username', 'StreamDesk'),
+                                 text, str(response.get('author', {}).get('id', '')), response.get('timestamp', ''))
                     results[target] = {'ok': True}
                 except self.c.Error as exc:
                     results[target] = {'ok': False, 'error': str(exc)}

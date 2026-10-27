@@ -9,6 +9,7 @@ StreamDesk lädt bzw. verwendet diese separaten Komponenten:
 | Chromium / Playwright | Live-Browser-Overlays | Separat installiert; Chromium-Drittanbieterlizenzen und Playwright Apache-2.0 |
 | Flask, Werkzeug, Gunicorn | Webanwendung und Webserver | Ihre jeweiligen BSD-/MIT-Lizenzen |
 | cryptography | Verschlüsselung gespeicherter Geheimnisse | Apache-2.0 / BSD |
+| py_webauthn / cbor2 | Prüfung von Passkey-Registrierung und -Anmeldung | BSD / MIT |
 | PyYAML | MediaMTX-Konfiguration | MIT |
 | websocket-client | Twitch-WebSocket-Client | Apache-2.0 |
 | grpcio / protobuf | YouTube-Live-Chat-Streaming | Apache-2.0 / BSD |
