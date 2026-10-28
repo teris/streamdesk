@@ -1,6 +1,6 @@
 # MediaMTX - StreamDesk
 
-**Aktuelle Version: 1.1.6**
+**Aktuelle Version: 1.1.8**
 
 Eine selbst gehostete Mehrbenutzer-Oberfläche für OBS-/Handy-Streams, manuelle Aufnahmen, Offline-Videos, Multistreaming und gemeinsamen Twitch-/YouTube-Chat.
 
@@ -15,6 +15,10 @@ Expertenmodus: zusätzliche Quellen und Konten
 ```
 
 ## Funktionen
+
+- Mehrfachupload mit Warteschlange, Datenmengen-/Uploadfortschritt und gemessenem Umwandlungsfortschritt je Datei; Videos in beiden Bibliotheken umbenennen und mit sichtbaren Nutzungshinweisen löschen.
+
+- Eigene Playlists mit Ordnern, Video-Reihenfolge und Dauerschleifen; Fortsetzen nach Live-Unterbrechung, verzögerter Offline-Fallback sowie Wochenzeitpläne und unterschiedliche Playlists je Ausgang im Expertenmodus.
 
 - Eigener Expertenmodus mit Untermenüs für technische MediaMTX-Einstellungen und zusätzlicher serverseitiger Prüfung; nach jeder neuen Anmeldung ausgeschaltet. Globale MediaMTX-Einstellungen benötigen zusätzlich Administratorrechte.
 - Zentrale Dienstfreigaben unter **Administration → Dienste & Freigaben**: Nur Administratoren können Funktionen für alle Benutzer sperren; Zugangsdaten, Einstellungen und Aufnahmen bleiben erhalten.
@@ -78,6 +82,27 @@ Streamstatus, umschaltbare Programmvorschau mit privatem Link und gemeinsamer Li
 
 </details>
 
+<details>
+<summary>Playlists – Ordner, Reihenfolge und Video-Uploads</summary>
+
+![Playlist-Verwaltung mit Ordnern, Video-Reihenfolge und Upload](screenshoots/playlists-1.1.7.png)
+
+</details>
+
+<details>
+<summary>Mehrfachupload – Warteschlange und Fortschritt je Video</summary>
+
+![Mehrfachupload mit getrennten Fortschrittsanzeigen für Übertragung und Video-Umwandlung](screenshoots/upload-fortschritt-1.1.8.png)
+
+</details>
+
+<details>
+<summary>Playlist-Ausspielung – Fallback, Zeitfenster und Ausgänge</summary>
+
+![Expertenbereich für Playlist-Fallback und Zeitpläne je Ausgang](screenshoots/playlist-zeitplan-1.1.7.png)
+
+</details>
+
 ## Installation
 
 Unterstützt werden **Debian 12/13 mit systemd und Python ab 3.11**, auf amd64 und arm64. Empfohlen wird ein eigener Debian-Server bzw. Proxmox-LXC. Der Installer benötigt root und Internetzugang.
@@ -121,6 +146,7 @@ Es gibt kein öffentliches Standardpasswort. Das Administratorkonto wird mit ein
 - [OBS und SRT-Verbindungsprobleme](docs/SRT.md)
 - [Reverse Proxy und NPMplus](docs/PROXY.md)
 - [Twitch- und Google-/YouTube-Kontofreigabe](docs/OAUTH.md)
+- [Playlists, Offline-Fallback und zeitgesteuerte Ausspielung](docs/PLAYLISTS.md)
 - [Discord-Bot erstellen und im Expertenmodus verbinden](docs/DISCORD.md)
 - [Dienste als Administrator global sperren und freigeben](docs/ADMIN_SERVICES.md)
 - [Konfigurationsvariablen](docs/CONFIGURATION.md)

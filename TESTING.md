@@ -1,8 +1,24 @@
-# Prüfbericht: StreamDesk 1.1.6
+# Prüfbericht: StreamDesk 1.1.8
 
 Die Unit-Tests sind für Linux ausgelegt; insbesondere verwenden Anwendung und Installer das POSIX-Modul `pwd`. Reine Windows-Python-Läufe sind daher kein unterstützter Testpfad.
 
 Die Unit-Tests und die reinen Einstellungs-/Dienst-Browsertests fixieren ausschließlich die Signierzeit ihrer Testsitzungen, damit rückwärts korrigierte Uhren auf dem Testhost keine zufälligen Abmeldungen auslösen. Die Sitzungsprüfung der Anwendung bleibt unverändert.
+
+## Mehrfachuploads und Medienverwaltung in 1.1.8
+
+180 Unit-Tests bestehen. Die elf zusätzlichen Fälle prüfen private Upload-Aufträge, wiederholbare Upload-Anfragen ohne doppelte Umwandlung, tatsächliche Encoder-Fortschritte, Zeitlimits und Wiederanlauf nach Serverneustart. Umbenennen erhält Dateien, Playlist-Verweise und Wiedergabepositionen. Fremdzugriffe und Anfragen ohne CSRF werden abgelehnt. Löschen prüft aktuelle Verwendungen, bestätigt das Entfernen aus inaktiven Playlists und schützt laufende sowie letzte Videos zugeordneter Playlists. Unbenutzte Videos können auch während eines anderen Uploads gelöscht werden.
+
+`tests/uploads_smoke.py` wurde mit FFmpeg/FFprobe 7.0.2 und Chromium 156 ausgeführt. Ein normaler Benutzer wählt drei Dateien gemeinsam aus. Bei gedrosselter lokaler Verbindung sind Zwischenstände des Uploads sichtbar; die echte Umwandlung liefert eigene Prozentwerte. Die Warteschlange läuft beim Menüwechsel weiter. Eine defekte Datei wird gemeldet, danach wird die nächste Datei verarbeitet. Fertige Videos haben H.264/AAC einschließlich stiller Audiospur bei fehlendem Ton. Beide Bibliotheken erlauben Umbenennen, bestätigtes Löschen entfernt Playlist-Verweise und die Datei, geschützte Videos zeigen den Grund. Die Mobilansichten bestehen bei 390 Pixeln ohne Seitenüberlauf oder JavaScript-Fehler.
+
+Die echten Playlist-/Programmtests und der Einstellungs-Browsertest bestehen erneut. Durchgehende Aufnahmen, Quellenpriorität, getrennte Ausgänge und Fortsetzen nach einer Live-Unterbrechung bleiben erhalten. Der zusätzliche README-Screenshot zeigt die tatsächlich laufende Umwandlung aus dem Upload-Test.
+
+## Playlists und Zeitpläne in 1.1.7
+
+169 Unit-Tests bestehen. Die 17 zusätzlichen Fälle prüfen normale Medienverwaltung gegenüber Experten-Ausspielung, CSRF und Mandantengrenzen, Ordnerzyklen/Namenskollisionen, Reihenfolge und Revisionen, zehnminütige Ausfallverzögerung, Live-Vorrang, getrennte stabile Ausgangsprogramme, zusätzliche Quellen, Mitternachts-/Wochenwechsel, die wiederholte Stunde der Zeitumstellung, Überschneidungen, Löschschutz, persistente Positionen, manuelle Stopps, Dienstsperren und den erweiterten Uploadpfad.
+
+`tests/playlists_smoke.py` wurde mit MediaMTX 1.21.3, FFmpeg/FFprobe 7.0.2 und Chromium 156 ausgeführt. Zwei echte lokale Ausgänge liefern unterschiedliche Playlist-Bilder; wiederholte Schleifen behalten denselben Publisher. Source 1 übernimmt vor Source 2, danach setzen die Playlists an der gespeicherten Position fort. Eine durchgehende Programmaufnahme bleibt derselbe Prozess und lässt sich anschließend dekodieren. Geprüft werden außerdem automatischer Start in einem neuen Zeitfenster, Ende des automatisch gestarteten Ausgangs, manueller Stopp ohne sofortigen Neustart sowie unveränderte fremde Pfade.
+
+Der Browser prüft Ordner-/Playlist-Erstellung, Reihenfolge speichern, Erhalt ungespeicherter Eingaben, einen echten MP4-Upload mit Hintergrundumwandlung in den gewählten Ordner, Zeitplanformular und Mobilansichten mit 390 Pixeln. Alle Medien und Streamingziele sind temporäre lokale Testdaten; öffentliche Twitch-/YouTube-Konten werden nicht angesprochen. Die neuen README-Screenshots stammen aus diesem Test.
 
 ## Zentrale Dienstfreigaben in 1.1.6
 

@@ -2,7 +2,7 @@
 (() => {
   const meta=document.querySelector('meta[name=streamdesk-services]');
   let flags=meta?JSON.parse(meta.content):{},adminLoading=false,loaded=false;
-  const routes={'settings-twitch':['twitch'],'settings-youtube':['youtube'],'settings-custom':['custom_outputs'],
+  const routes={playlists:['playlists'],'expert-playlists':['playlists'],'settings-twitch':['twitch'],'settings-youtube':['youtube'],'settings-custom':['custom_outputs'],
     'expert-discord':['discord'],'expert-recording':['recording'],'expert-playback':['playback'],
     'expert-viewers':['viewers'],'expert-renewal':['automation'],'expert-routing':['advanced_routing'],
     'expert-outputs':['advanced_routing'],'expert-automation':['automation','notifications']};

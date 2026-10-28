@@ -1,5 +1,24 @@
 # Änderungen
 
+## 1.1.8
+
+- Mehrere MP4-Dateien gleichzeitig in Offline- und Playlist-Bibliothek auswählen; gemeinsame Warteschlange verarbeitet die Dateien nacheinander und bleibt beim Menüwechsel erhalten. Fehlerhafte Videos verhindern die folgenden Uploads nicht.
+- Bis zu 50 wartende Dateien aufnehmen, weitere Videos ergänzen, wartende Einträge entfernen und fehlgeschlagene Uploads erneut versuchen. Der beim Hinzufügen gewählte Zielordner bleibt pro Datei erhalten.
+- Pro Datei getrennte Fortschrittsanzeigen für Upload mit übertragener Datenmenge sowie tatsächliche FFmpeg-Umwandlung. Abschluss erst nach erfolgreichem Speichern; private Upload-Aufträge, Wiederaufnahme der Statusanzeige nach Seitenneuladen und Schutz vor doppelter Verarbeitung bei wiederholter Anfrage.
+- Videos in beiden Bibliotheken umbenennen; Dateizugänge, IDs, Playlist-Verweise und Wiedergabepositionen bleiben erhalten. Der sichtbare Name wird auch für Dateidownloads verwendet.
+- Löschbarkeit und konkrete Nutzungsgründe sichtbar. Löschen fragt aktuelle Verweise erneut ab und kann nach Bestätigung Referenzen aus inaktiven Playlists entfernen. Aktuelle Offline-Videos, laufende Playlist-Dateien und letzte Videos zugeordneter Playlists bleiben geschützt.
+- Umwandlungs-Zeitlimit, Fortschritts-/Fehlerstatus und Speicherreservierungen für aufeinanderfolgende Dateien abgesichert. Neue Dokumentation und Version 1.1.8.
+- README um einen Screenshot der laufenden Upload-/Umwandlungsanzeige ergänzt. 180 Unit-Tests sowie echte Browser- und Medientests für Mehrfachupload, Umbenennen, Löschen und bestehende Playlist-/Programmfunktionen bestanden; Einzelheiten in TESTING.md.
+
+## 1.1.7
+
+- Separate Playlist-Verwaltung mit benannten Ordnern/Unterordnern, Video-Uploads bis 500 MB/120 Minuten, Reihenfolge, mehrfachen Videoeinträgen und Dauerschleifen. Die vorhandene Offline-Video-Auswahl bleibt erhalten.
+- Expertenbereich für verzögerten Playlist-Fallback, Regeln hinter Source 2/weiteren Eingängen und unabhängige Playlists je Ausgang. Echte zugeordnete Live-Quellen behalten Vorrang; Playlists werden beim nächsten Einsatz an ihrer gespeicherten Position fortgesetzt.
+- Wochenzeitpläne mit IANA-Zeitzonen, Mitternachtsfenstern, Überschneidungsprüfung und Sommer-/Winterzeit. Optionaler automatischer Ausgangsstart mit eigenem Ende; manueller Stopp hat Vorrang und manuell gestartete Ausgänge bleiben unabhängig.
+- Eigene stabile Programmidentitäten für Ausgangsregeln, Playlist-Status im Dashboard und geschützter Programmvorschau. Programmaufnahmen bleiben bei Playlist-/Live-Wechseln erhalten.
+- Globale Dienstfreigabe „Playlists“ mit serverseitiger Sperre; Automation-Freigabe für Zeitpläne. Mandantengrenzen, Schutz referenzierter Videos/Playlists, persistente Positionen und Archivierung bei Kontolöschung ergänzt.
+- VERSION, README, Installation und Betriebsdokumentation auf 1.1.7 aktualisiert.
+
 ## 1.1.6
 
 - Administration mit gruppierten Dienstfreigaben für alle Benutzer: Plattformen, Discord, WebRTC, neue Aufnahmen, Playback, Zuschauerlinks, zusätzliche Quellen/Routing, Browser-Overlays, Automation und Benachrichtigungen. Nur Administratoren ändern die Freigaben; Expertenmodus und direkte API-Aufrufe umgehen keine Sperren. Konfigurationen und Archive bleiben erhalten.

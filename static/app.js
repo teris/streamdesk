@@ -7,7 +7,6 @@ function redirectToLogin() { if (!redirecting) { redirecting=true;location.assig
 let state;
 let failures = 0;
 let toastTimer;
-let transfer = null;
 let programPreviewWanted = true;
 let librarySignature = '';
 let libraryLoading = false;
@@ -27,6 +26,8 @@ const rateHistory = {receive:[], send:[]};
 const viewInfo = {
   dashboard:['ÜBERSICHT','Dein Stream auf einen Blick.','Signal, Sendezeit und Medien – alles an einem Ort.','Dashboard'],
   sources:['LIVE-EINGÄNGE','Deine Quellen.','Live-Eingänge, Vorschau und aktuelle Quellensteuerung.','Quellen'],
+  playlists:['MEDIENBIBLIOTHEK','Deine Playlists.','Ordner, Videos und eigene Dauerschleifen getrennt verwalten.','Playlists'],
+  'expert-playlists':['EXPERTENMODUS','Playlist-Ausspielung.','Fallback, Verzögerung und Zeitpläne für Quellen und Ausgänge.','Playlist-Ausspielung'],
   videos:['MEDIENBIBLIOTHEK','Deine Offline-Videos.','Videos auswählen, hochladen und mit Overlays gestalten.','Offline-Videos'],
   recordings:['AUFNAHMEBIBLIOTHEK','Aufnehmen & Wiederholen.','Deine Aufnahmen speichern, herunterladen und manuell als Source 1 zuschalten.','Aufnahmen'],
   chat:['GEMEINSAMER LIVE-CHAT','Deine Chats an einem Ort.','Twitch und YouTube lesen, gezielt schreiben und als Widget einbinden.','Chat & Widget'],
@@ -168,7 +169,7 @@ function render(data) {
   $('#connection').classList.toggle('good', online);
   $('#start').disabled = busy || !online || data.enabled || !data.output.configured || ['queued','processing'].includes(data.upload.state);
   $('#stop').disabled = busy || !online || !data.enabled;
-  $('#upload-button').disabled = busy || !online || ['queued','processing'].includes(data.upload.state);
+  $('#upload-button').disabled = busy;
   const metadataReady = window.StreamDeskServices.allowed('twitch') && !!data.twitch_edit_ready;
   $('#save-channel').disabled = busy || !online || !metadataReady;
   $('#load-channel').disabled = busy || !online || !metadataReady;
@@ -209,10 +210,11 @@ function render(data) {
   $('#account').textContent = data.output.account ? `Twitch-Konto: ${data.output.account}` : data.output.configured ? 'Ausgang ist eingerichtet.' : 'Noch kein Ausgang eingerichtet.';
   $('#oauth-note').textContent = data.oauth_ready ? 'Verbinde deinen Account über Twitch. Der Stream startet erst auf deinen Klick.' : 'Die Twitch-App muss noch einmalig vom Administrator eingerichtet werden. Ein Streamschlüssel funktioniert bereits.';
   $('#oauth').setAttribute('aria-disabled', data.enabled ? 'true' : 'false');
-  $('#upload-meter').hidden = !transfer;
-  $('#upload-state').textContent = transfer ? `Datei wird hochgeladen: ${transfer.percent} %${transfer.percent === 100 ? ' – wird auf dem Server geprüft …' : ''}` : data.upload.message || 'Standard-Offline-Video ist eingerichtet.';
+  $('#upload-meter').hidden = true;
+  $('#upload-state').textContent = data.upload.message || 'Standard-Offline-Video ist eingerichtet.';
   $('#upload-state').classList.toggle('error', data.upload.state === 'error');
-  $('#upload-progress').hidden = !!transfer || !['queued','processing'].includes(data.upload.state);
+  $('#upload-progress').hidden = !!data.upload.job_id || !['queued','processing'].includes(data.upload.state);
+  if(data.upload.stage==='processing'&&data.upload.state==='processing'){$('#upload-meter').hidden=false;$('#upload-meter').value=data.upload.progress||0;$('#upload-state').textContent=(data.upload.filename||'Video')+' · Umwandlung: '+Math.round(data.upload.progress||0)+' %';}
   $('#updated').textContent = 'Aktualisiert ' + new Date().toLocaleTimeString('de-DE');
 }
 async function refresh() {
@@ -326,12 +328,7 @@ async function loadLibrary(force = false) {
       const actions = document.createElement('div');actions.className = 'video-actions';
       const select = document.createElement('button');select.className = 'secondary';select.textContent = selected ? 'Ausgewählt' : 'Dieses Video verwenden';select.disabled = selected || !!state?.enabled || ['queued','processing'].includes(state?.upload?.state);
       select.addEventListener('click', () => action(async () => {await api(`/api/videos/${video.id}/select`,{});await loadLibrary(true);}, 'Offline-Video ausgewählt.', card));actions.append(select);
-      const del = document.createElement('button');del.className = 'danger';del.textContent = 'Löschen';del.disabled = selected || ['queued','processing'].includes(state?.upload?.state);
-      const confirm = document.createElement('div');confirm.className='delete-confirm';confirm.hidden=true;
-      const question=document.createElement('p');question.className='small';question.textContent='Dieses Video endgültig aus deiner Bibliothek löschen?';confirm.append(question);
-      const yes=document.createElement('button');yes.className='danger';yes.textContent='Endgültig löschen';yes.addEventListener('click',()=>action(async()=>{await api(`/api/videos/${video.id}/delete`,{});await loadLibrary(true);},'Video gelöscht.',card));confirm.append(yes);
-      const cancel=document.createElement('button');cancel.className='ghost';cancel.textContent='Abbrechen';cancel.addEventListener('click',()=>confirm.hidden=true);confirm.append(cancel);
-      del.addEventListener('click',()=>confirm.hidden=!confirm.hidden);actions.append(del);card.append(actions,confirm);
+      card.append(actions,window.StreamDeskMedia.controls(video,()=>loadLibrary(true)));
       const editor=document.createElement('details');const summary=document.createElement('summary');summary.textContent='Text-Overlay bearbeiten';editor.append(summary);
       const form=document.createElement('form');
       const label=document.createElement('label');label.textContent='Dein Text';
@@ -442,43 +439,6 @@ form('#password-form','/api/password','Dein Passwort wurde geändert.');
 form('#user-form','/api/admin/users','Benutzer mit Live-Quellen angelegt.',loadAdmin);
 form('#oauth-form','/api/admin/oauth','Twitch-App gespeichert.',loadAdmin);
 form('#google-form','/api/admin/google','Google-App gespeichert.',loadAdmin);
-function uploadVideo(file) {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/upload');
-    xhr.setRequestHeader('X-CSRF-Token', csrf);
-    xhr.responseType = 'json';
-    xhr.timeout = 600000;
-    transfer = {percent:0};
-    if (state) render(state);
-    xhr.upload.onprogress = event => {
-      if (!event.lengthComputable) return;
-      transfer.percent = Math.min(100, Math.round(event.loaded / event.total * 100));
-      $('#upload-meter').value = transfer.percent;
-      if (state) render(state);
-    };
-    xhr.onload = () => {
-      if (xhr.status === 401) { redirectToLogin(); reject(new Error('Bitte erneut anmelden.')); return; }
-      if (xhr.status >= 200 && xhr.status < 300 && xhr.response?.ok) { resolve(xhr.response); return; }
-      reject(new Error(xhr.response?.error || (xhr.status === 413 ? 'NPMplus hat den Upload abgewiesen. Upload-Limit im Proxy auf mindestens 501 MB setzen.' : `Upload fehlgeschlagen (HTTP ${xhr.status}). Bitte Verbindung und Proxy prüfen.`)));
-    };
-    xhr.onerror = () => reject(new Error('Die Verbindung beim Upload wurde unterbrochen. Bitte erneut versuchen.'));
-    xhr.ontimeout = () => reject(new Error('Der Upload hat zu lange gedauert. Bitte eine kleinere Datei oder eine schnellere Verbindung verwenden.'));
-    xhr.onabort = () => reject(new Error('Upload abgebrochen.'));
-    const body = new FormData();body.append('video',file);
-    xhr.send(body);
-  });
-}
-$('#upload-form').addEventListener('submit', event => {
-  event.preventDefault();
-  const file = $('#upload-form [name=video]').files[0];
-  if (!file) { formFeedback($('#upload-form'),'Bitte zuerst eine MP4-Datei auswählen.',true); return; }
-  if (file.size > 500 * 1024 * 1024) { formFeedback($('#upload-form'),'Die Datei ist zu groß. Maximal 500 MB.',true); return; }
-  action(async () => {
-    try { await uploadVideo(file); $('#upload-form').reset(); }
-    finally { transfer = null; if (state) render(state); }
-  }, 'Datei angekommen. Der Verarbeitungsstatus steht direkt darunter.', $('#upload-form'));
-});
 async function loadAdmin() {
   const data = await api('/api/admin');
   $('#client-id').value=data.client_id;

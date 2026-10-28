@@ -11,6 +11,8 @@
     <link rel="stylesheet" href="/static/style.css?v={{app_version}}&amp;b={{asset_build}}">
     <link rel="stylesheet" href="/static/features.css?v={{app_version}}&amp;b={{asset_build}}">
     <script src="/static/chat.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
+    <script src="/static/uploads.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
+    <script src="/static/playlists.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
     <script src="/static/services.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
     <script src="/static/app.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
     <script src="/static/features.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
@@ -41,7 +43,7 @@
                     stroke="currentColor" stroke-width="1.6" aria-hidden="true">
                     <rect x="3" y="4" width="18" height="16" rx="2" />
                     <path d="m10 8 6 4-6 4z" />
-                </svg><span>Offline-Videos</span></a><a class="menu-link" href="#recordings"><svg viewBox="0 0 24 24"
+                </svg><span>Offline-Videos</span></a><a class="menu-link" href="#playlists"><span>▷ Playlists</span></a><a class="menu-link" href="#recordings"><svg viewBox="0 0 24 24"
                     fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
                     <circle cx="12" cy="12" r="9" />
                     <circle cx="12" cy="12" r="3" />
@@ -145,7 +147,7 @@
                                 <p>Vorschau deines fertigen Streams</p>
                             </div><iframe allow="autoplay; fullscreen" hidden="" title="Ausgangsvorschau"></iframe>
                         </div>
-                        <div class="program-link-row"><label>Link zur ausgewählten Programmvorschau<input id="program-link" type="text" readonly></label><button id="program-link-copy" class="ghost" type="button">Link kopieren</button><a id="program-link-open" target="_blank" rel="noopener">Vorschau öffnen ↗</a><a data-service="webrtc" id="program-webrtc-open" target="_blank" rel="noopener" data-expert-only {% if not expert %}hidden{% endif %}>WebRTC mit Ton ↗</a><p class="small muted">Privater Vorschau-Link · Anmeldung erforderlich.</p></div>
+                        <div class="program-link-row"><label>Link zur ausgewählten Programmvorschau<input id="program-link" type="text" readonly></label><button id="program-link-copy" class="ghost" type="button">Link kopieren</button><a id="program-link-open" target="_blank" rel="noopener">Vorschau öffnen ↗</a><a data-service="webrtc" id="program-webrtc-open" target="_blank" rel="noopener" data-expert-only {% if not expert %}hidden{% endif %}>WebRTC mit Ton ↗</a><p class="small muted">Privater Vorschau-Link · Anmeldung erforderlich.</p><p id="program-playout" class="small" role="status"></p></div>
                         <div class="source-footer">
                             <p class="small muted" id="program-hint">Programm und Offline-Video sind auch ohne Streamingziel als Vorschau verfügbar.</p><button class="ghost preview-toggle"
                                 data-slot="3">Vorschau schließen</button>
@@ -255,8 +257,8 @@
                         </div>
                         <p class="muted small">Wird gezeigt, wenn alle Live-Quellen fehlen. Eine aktive Twitch-Verbindung
                             bleibt dabei bestehen.</p>
-                        <form id="upload-form"><label class="upload-box">↑ <strong>MP4-Datei auswählen</strong><input
-                                    accept="video/mp4,.mp4" name="video" required="" type="file" /><span
+                        <form id="upload-form" data-upload-form data-upload-url="/api/upload"><label class="upload-box">↑ <strong>Mehrere MP4-Dateien auswählen</strong><input
+                                    accept="video/mp4,.mp4" name="video" multiple required="" type="file" /><span
                                     class="small muted">Max. 500 MB · 5 Minuten · Ton wird übernommen, falls
                                     vorhanden</span></label><button class="secondary" id="upload-button"
                                 type="submit">Zur Bibliothek hinzufügen</button></form><progress
@@ -264,6 +266,7 @@
                         <p class="small muted" id="upload-state">Deine Videos bleiben in deiner persönlichen Bibliothek.
                         </p>
                         <div class="progress" hidden="" id="upload-progress"><span></span></div>
+                        <section data-upload-queue class="upload-queue" hidden></section>
                     </article>
                 </details>
                 <section class="panel video-library">
@@ -375,6 +378,7 @@
                     </section>
                 </div>
             </section>
+            {% include 'playlists.html' %}
             {% include 'settings-pages.html' %}
             {% include 'expert-pages.html' %}
             <section class="app-view" data-view="account" aria-label="Mein Konto" hidden>                        <section class="panel wide-details">

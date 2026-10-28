@@ -34,7 +34,7 @@ MEDIA_DIGESTS = {
     'amd64': '0a2ea7eba96023631efa1bea7804823a9145b043b6646a8a05798d4ac24ed635',
     'arm64': '27f038237cb5f77a724f6afc58eca2798f2bc4edf9989895631a80eeb41a4fe2',
 }
-FILES = ['service_policy.py', 'outbound_http.py', 'app.py', 'account_features.py', 'auth_strategy.py', 'automation_features.py', 'build_d_features.py', 'integrations.py', 'media_config.py', 'mediamtx_client.py', 'media_features.py', 'notification_features.py', 'program_preview.py', 'routing_model.py', 'routing_features.py', 'playback_features.py', 'ROADMAP.md', 'browser_overlay.py', 'bootstrap.py',
+FILES = ['upload_features.py', 'playlist_features.py', 'service_policy.py', 'outbound_http.py', 'app.py', 'account_features.py', 'auth_strategy.py', 'automation_features.py', 'build_d_features.py', 'integrations.py', 'media_config.py', 'mediamtx_client.py', 'media_features.py', 'notification_features.py', 'program_preview.py', 'routing_model.py', 'routing_features.py', 'playback_features.py', 'ROADMAP.md', 'browser_overlay.py', 'bootstrap.py',
          'gunicorn.conf.py', 'requirements.txt', 'stream_list.proto', 'stream_list_pb2.py',
          'stream_list_pb2_grpc.py', 'README.md', 'INSTALL.md', 'LICENSE', 'NOTICE', 'LICENSE.youtube-sample.txt', 'VERSION', 'install.sh', 'uninstall.sh', '.env.example', 'CHANGELOG.md', 'FEATURE.md', 'THIRD_PARTY.md', 'SECURITY.md', 'CONTRIBUTING.md', 'TESTING.md']
 

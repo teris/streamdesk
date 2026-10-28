@@ -34,6 +34,8 @@ def install_account_routes(c):
                 raise c.Error('Für diesen Benutzer läuft noch ein Auftrag oder Export. Bitte dessen Abschluss abwarten.', http_status=409)
             if c.FEATURES.playback.active_clips.get(uid):
                 raise c.Error('Für diesen Benutzer wird noch ein Clip erstellt. Bitte dessen Abschluss abwarten.', http_status=409)
+            for key in list(c.PLAYLISTS.jobs):
+                if key[0] == uid:c.PLAYLISTS.checkpoint(key, pause=True)
             prefix = target['prefix']
             if prefix!=c.NAMESPACE+'/'+target['username']+'/':
                 raise c.Error('Dieses ältere Pfadschema benötigt zuerst eine Migration.')
@@ -53,13 +55,14 @@ def install_account_routes(c):
             tables = ('videos','recordings','outputs','twitch_auth','youtube_auth','widget_tokens','viewer_links',
                       'routing_sources','output_routing','routing_programs','scenes','webauthn_credentials',
                       'recovery_codes','discord_auth','routing_policy','clips','automation_hooks','scheduled_jobs',
-                      'export_targets','exported_media','notification_settings','webauthn_challenges')
+                      'export_targets','exported_media','notification_settings','webauthn_challenges',
+                      'playlist_folders','playlists','playlist_profiles','playlist_positions','playlist_output_state','video_uploads')
             snapshot = {table:c.rows('SELECT * FROM '+table+' WHERE user_id=?',(uid,)) for table in tables}
             archive = c.DATA/'deleted-users'/(str(uid)+'-'+str(int(time.time()))+'-'+secrets.token_hex(4))
             archive.mkdir(parents=True,mode=0o700)
             moved = []
             try:
-                for folder in (c.DATA/'media'/target['username'],c.DATA/'recordings'/target['username'],c.DATA/'clips'/target['username'],
+                for folder in (c.DATA/'media'/target['username'],c.DATA/'recordings'/target['username'],c.DATA/'clips'/target['username'],c.DATA/'playout'/str(uid),
                                c.FEATURES.native_root/target['username']):
                     if folder.is_symlink():
                         raise c.Error('Ein Benutzerverzeichnis ist ein symbolischer Link; Löschung abgebrochen.')

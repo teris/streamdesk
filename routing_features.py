@@ -24,7 +24,7 @@ class RoutingFeatures:
     def change(self, user):
         c = self.c
         with c.LOCK:
-            tables = ('routing_sources','output_routing','routing_programs','outputs','routing_policy')
+            tables = ('routing_sources','output_routing','routing_programs','outputs','routing_policy','playlist_profiles')
             previous = {table:c.rows('SELECT * FROM '+table+' WHERE user_id=?',(user['id'],)) for table in tables}
             try:
                 yield

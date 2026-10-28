@@ -1559,3 +1559,344 @@ class ServicePolicyTests(unittest.TestCase):
         self.toggle('discord',True)
         self.assertTrue(app.SERVICES.enabled('discord'))
         self.assertFalse(app.SERVICES.enabled('youtube'))
+
+
+class PlaylistTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        with patch.object(app.threading,'Thread'):
+            cls.uid=app.add_user('playlist_user','Playlist-Fixture-Password-123')
+            cls.other=app.add_user('playlist_other','Playlist-Fixture-Password-456')
+        app.write('UPDATE videos SET duration=3 WHERE user_id IN (?,?)',(cls.uid,cls.other))
+
+    def setUp(self):
+        import json
+        self.json=json;self.config=app.CONFIG.read_text()
+        self.flags=app.rows("SELECT * FROM settings WHERE name='service_policy'")
+        app.write("DELETE FROM settings WHERE name='service_policy'")
+        self.user=app.rows('SELECT * FROM users WHERE id=?',(self.uid,))[0]
+        self.video=app.rows('SELECT id FROM videos WHERE user_id=?',(self.uid,))[0]['id']
+        self.foreign_video=app.rows('SELECT id FROM videos WHERE user_id=?',(self.other,))[0]['id']
+        self.client=app.app.test_client();self.headers={'X-CSRF-Token':'playlist-test'}
+        with self.client.session_transaction() as session:session.update(uid=self.uid,version=1,csrf='playlist-test',expert_mode=True)
+
+    def tearDown(self):
+        for key in list(app.PLAYLISTS.jobs):
+            if key[0]==self.uid:app.PLAYLISTS.checkpoint(key,pause=True)
+        for table in ('playlist_folders','playlists','playlist_profiles','playlist_positions','playlist_output_state','routing_programs','outputs','output_routing','routing_sources'):
+            app.write('DELETE FROM '+table+' WHERE user_id=?',(self.uid,))
+        app.write('UPDATE videos SET folder_id=NULL WHERE user_id=?',(self.uid,))
+        app.write("UPDATE users SET output='',output_kind='twitch' WHERE id=?",(self.uid,))
+        app.CONFIG.write_text(self.config);app.write("DELETE FROM settings WHERE name='service_policy'")
+        for row in self.flags:app.write('INSERT INTO settings(name,value) VALUES (?,?)',(row['name'],row['value']))
+        app.PLAYLISTS.offline_since={key:value for key,value in app.PLAYLISTS.offline_since.items() if key[0]!=self.uid}
+
+    def post(self,path,body,status=200):
+        result=self.client.post(path,json=body,headers=self.headers)
+        self.assertEqual(result.status_code,status,result.get_data(as_text=True));return result.json
+
+    def playlist(self,name='Playlist A',items=None):
+        return self.post('/api/playlists',{'name':name,'items':items if items is not None else [self.video]})['id']
+
+    def profile(self,**values):
+        body=dict(scope='default',enabled=True,auto_start=False,playlist_id=None,delay_seconds=600,timezone='Europe/Berlin',schedules=[])
+        body.update(values);return body
+
+    def test_library_is_normal_but_playout_requires_expert_and_csrf(self):
+        with self.client.session_transaction() as session:session['expert_mode']=False
+        self.playlist()
+        self.assertEqual(self.client.get('/api/playlists').status_code,200)
+        self.post('/api/playout',self.profile(),403)
+        self.assertEqual(self.client.post('/api/playlists',json={'name':'No CSRF'}).status_code,403)
+
+    def test_foreign_media_folders_and_playlists_are_not_usable(self):
+        other=app.write('INSERT INTO playlist_folders(user_id,name) VALUES (?,?)',(self.other,'Private'))
+        self.post('/api/playlists',{'name':'Foreign media','items':[self.foreign_video]},404)
+        self.post('/api/playlists',{'name':'Foreign folder','folder_id':other},404)
+        result=self.client.delete('/api/playlist-folders/'+str(other),headers=self.headers)
+        self.assertEqual(result.status_code,404)
+        self.post('/api/playlists/videos/'+str(self.foreign_video)+'/folder',{'folder_id':None},404)
+
+    def test_folder_cycle_nonempty_delete_and_names(self):
+        first=self.post('/api/playlist-folders',{'name':'Archiv'})['id']
+        second=self.post('/api/playlist-folders',{'name':'Nacht','parent_id':first})['id']
+        self.post('/api/playlist-folders/'+str(first),{'name':'Archiv','parent_id':second},400)
+        self.assertEqual(self.client.delete('/api/playlist-folders/'+str(first),headers=self.headers).status_code,409)
+        self.post('/api/playlist-folders',{'name':'archiv'},409)
+        ident=self.post('/api/playlists',{'name':'Nachtprogramm','folder_id':second,'items':[self.video]})['id']
+        self.assertEqual(self.client.delete('/api/playlist-folders/'+str(second),headers=self.headers).status_code,409)
+        self.post('/api/playlists/'+str(ident),{'name':'Nachtprogramm','folder_id':first,'items':[self.video]})
+        self.assertEqual(self.client.delete('/api/playlist-folders/'+str(second),headers=self.headers).status_code,200)
+
+    def test_playlist_order_duplicates_and_revision(self):
+        ident=self.playlist(items=[self.video,self.video])
+        self.post('/api/playlists/'+str(ident),{'name':'Renamed','items':[self.video,self.video]})
+        row=app.rows('SELECT * FROM playlists WHERE id=?',(ident,))[0]
+        self.assertEqual(row['revision'],1);self.assertEqual(self.json.loads(row['items']),[self.video,self.video])
+        self.post('/api/playlists/'+str(ident),{'name':'Renamed','items':[self.video]})
+        self.assertEqual(app.rows('SELECT revision FROM playlists WHERE id=?',(ident,))[0]['revision'],2)
+
+    def test_live_preempts_and_resets_outage_delay(self):
+        ident=self.playlist();self.post('/api/playout',self.profile(playlist_id=ident))
+        program=app.MODEL.program(self.user)
+        _,eligible=app.PLAYLISTS.decision(self.user,program,False,True,1000);self.assertFalse(eligible)
+        _,eligible=app.PLAYLISTS.decision(self.user,program,False,True,1599);self.assertFalse(eligible)
+        _,eligible=app.PLAYLISTS.decision(self.user,program,False,True,1600);self.assertTrue(eligible)
+        _,eligible=app.PLAYLISTS.decision(self.user,program,True,True,1601);self.assertFalse(eligible)
+        _,eligible=app.PLAYLISTS.decision(self.user,program,False,True,1602);self.assertFalse(eligible)
+
+    def test_own_output_rules_split_shared_program_and_keep_identity_on_edit(self):
+        a=self.playlist();b=self.playlist('Playlist B')
+        before=app.MODEL.output_program(self.user,'twitch')['id'];self.assertEqual(before,'main')
+        self.post('/api/playout',self.profile(scope='output:twitch',playlist_id=a))
+        self.post('/api/playout',self.profile(scope='output:youtube',playlist_id=b))
+        twitch=app.MODEL.output_program(self.user,'twitch');youtube=app.MODEL.output_program(self.user,'youtube')
+        self.assertNotEqual(twitch['id'],youtube['id']);self.assertNotEqual(twitch['id'],'main')
+        self.assertEqual(app.PLAYLISTS.plan(self.user,twitch)['playlist']['id'],a)
+        self.assertEqual(app.PLAYLISTS.plan(self.user,youtube)['playlist']['id'],b)
+        self.post('/api/playout',self.profile(scope='output:twitch',playlist_id=b,delay_seconds=0))
+        self.assertEqual(app.MODEL.output_program(self.user,'twitch')['id'],twitch['id'])
+
+    def test_source2_and_extra_source_profiles_keep_fixed_sources(self):
+        ident=self.playlist();self.post('/api/playout',self.profile(scope='source:source1',playlist_id=ident),400)
+        self.post('/api/playout',self.profile(scope='source:source2',playlist_id=ident))
+        source=self.post('/api/routing/sources',{'label':'Camera 3','protocol':'rtmp'})['key']
+        self.post('/api/playout',self.profile(scope='source:'+source,playlist_id=ident))
+        self.assertEqual([row['key'] for row in app.MODEL.sources(self.user)[:2]],['source1','source2'])
+        self.assertEqual(app.PLAYLISTS.plan(self.user,app.MODEL.program(self.user))['profile']['scope'],'source:source2')
+
+    def test_daily_schedule_midnight_and_daylight_saving(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        from playlist_features import active_schedule
+        rules=[dict(playlist_id=1,start='12:00',end='00:00',days=list(range(7))),dict(playlist_id=2,start='00:00',end='06:00',days=list(range(7))),dict(playlist_id=3,start='06:00',end='12:00',days=list(range(7)))]
+        for hour,wanted in ((12,1),(23,1),(0,2),(5,2),(6,3),(11,3)):
+            stamp=datetime(2026,10,28,hour,0,tzinfo=ZoneInfo('Europe/Berlin')).timestamp()
+            self.assertEqual(active_schedule(rules,'Europe/Berlin',stamp)[0]['playlist_id'],wanted)
+        sunday=[dict(playlist_id=1,start='02:00',end='03:00',days=[6])]
+        windows=[active_schedule(sunday,'Europe/Berlin',datetime(2026,10,25,2,30,fold=fold,tzinfo=ZoneInfo('Europe/Berlin')).timestamp())[1] for fold in (0,1)]
+        self.assertEqual(windows[0],windows[1])
+
+    def test_overlapping_week_boundary_and_invalid_rules_rejected(self):
+        ident=self.playlist()
+        rules=[dict(playlist_id=ident,start='23:00',end='01:00',days=[6]),dict(playlist_id=ident,start='00:30',end='02:00',days=[0])]
+        self.post('/api/playout',self.profile(schedules=rules),409)
+        for days in ([True],[{}],[],[7]):
+            self.post('/api/playout',self.profile(schedules=[dict(playlist_id=ident,start='00:00',end='06:00',days=days)]),400)
+        self.post('/api/playout',self.profile(timezone='bad/timezone'),400)
+
+    def test_zero_delay_schedule_and_output_override(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        ident=self.playlist();self.post('/api/playout',self.profile(playlist_id=ident))
+        self.post('/api/playout',self.profile(scope='output:twitch',schedules=[dict(playlist_id=ident,start='00:00',end='00:00',days=list(range(7)))],delay_seconds=600))
+        plan,eligible=app.PLAYLISTS.decision(self.user,app.MODEL.output_program(self.user,'twitch'),False,True,500)
+        self.assertTrue(eligible);self.assertTrue(plan['scheduled'])
+
+    def test_video_and_assigned_playlist_deletion_are_protected(self):
+        ident=self.playlist()
+        self.post('/api/videos/'+str(self.video)+'/delete',{},409)
+        self.post('/api/playout',self.profile(playlist_id=ident))
+        self.assertEqual(self.client.delete('/api/playlists/'+str(ident),headers=self.headers).status_code,409)
+        self.post('/api/playout',self.profile())
+        self.assertEqual(self.client.delete('/api/playlists/'+str(ident),headers=self.headers).status_code,200)
+        self.assertTrue(Path(app.owned_video(self.user,self.video)['path']).is_file())
+
+    def test_progress_position_survives_live_pause_and_restart(self):
+        ident=self.playlist(items=[self.video,self.video]);self.post('/api/playout',self.profile(playlist_id=ident,delay_seconds=0))
+        program=app.MODEL.program(self.user);plan=app.PLAYLISTS.plan(self.user,program)
+        args,_=app.PLAYLISTS.start(self.user,program,plan)
+        key=(self.uid,'main');job=app.PLAYLISTS.jobs[key];job['progress'].write_text('out_time_us=4200000\n')
+        app.PLAYLISTS.checkpoint(self.uid,pause=True)
+        self.assertAlmostEqual(app.rows('SELECT offset FROM playlist_positions WHERE user_id=?',(self.uid,))[0]['offset'],4.2)
+        app.PLAYLISTS.start(self.user,program,plan)
+        self.assertAlmostEqual(app.PLAYLISTS.jobs[key]['offset'],4.2)
+        self.assertIn('-stream_loop',args)
+        app.PLAYLISTS.checkpoint(key,pause=True)
+        self.post('/api/playlists/'+str(ident),{'name':'Updated','items':[self.video]})
+        plan=app.PLAYLISTS.plan(self.user,program);app.PLAYLISTS.start(self.user,program,plan)
+        self.assertEqual(app.PLAYLISTS.jobs[key]['offset'],0)
+
+    def test_service_switch_and_automation_pause_preserve_library(self):
+        ident=self.playlist();self.post('/api/playout',self.profile(playlist_id=ident,schedules=[dict(playlist_id=ident,start='00:00',end='00:00',days=list(range(7)))]))
+        flags=app.SERVICES.flags();flags['automation']=False;app.set_setting('service_policy',self.json.dumps(flags))
+        plan=app.PLAYLISTS.plan(self.user,app.MODEL.program(self.user));self.assertFalse(plan['scheduled'])
+        flags['playlists']=False;app.set_setting('service_policy',self.json.dumps(flags))
+        self.assertEqual(self.client.get('/api/playlists').status_code,403)
+        self.assertIsNone(app.PLAYLISTS.plan(self.user,app.MODEL.program(self.user)))
+        self.assertTrue(app.rows('SELECT id FROM playlists WHERE id=?',(ident,)))
+
+    def test_automatic_start_respects_manual_stop_and_leaves_manual_output_running(self):
+        ident=self.playlist();self.post('/api/playout',self.profile(scope='output:twitch',playlist_id=ident,delay_seconds=0,auto_start=True))
+        app.write('INSERT INTO outputs(user_id,kind,endpoint,selected) VALUES (?,?,?,1)',(self.uid,'twitch',app.encrypt('rtmps://fixture.invalid/live#key')))
+        program=app.MODEL.output_program(self.user,'twitch');plan=app.PLAYLISTS.plan(self.user,program)
+        app.PLAYLISTS.manual_control(self.user,'twitch')
+        config=app.yaml.safe_load(app.CONFIG.read_text());config['paths'][app.output_path(self.user,'twitch')]['forward']=[]
+        with patch.object(app,'forward') as forward:
+            app.PLAYLISTS.automatic(self.user,program,plan,True,config,2000)
+            forward.assert_not_called()
+        config['paths'][app.output_path(self.user,'twitch')]['forward']=[{'dest':'rtmps://fixture.invalid/live#key'}]
+        with patch.object(app,'forward') as forward:
+            app.PLAYLISTS.automatic(self.user,program,None,False,config,2001)
+            forward.assert_not_called()
+
+    def test_upload_uses_playlist_duration_limit_and_owned_folder(self):
+        folder=self.post('/api/playlist-folders',{'name':'Uploads'})['id']
+        with patch.object(app.JOBS,'submit') as submit:
+            response=self.client.post('/api/playlists/upload',data={'folder_id':str(folder),'video':(io.BytesIO(b'fixture'),'clip.mp4')},headers=self.headers)
+            self.assertEqual(response.status_code,200,response.json)
+            self.assertEqual(submit.call_args.args[-2:],(7200,folder))
+            Path(submit.call_args.args[2]).unlink(missing_ok=True)
+        app.UPLOAD_RESERVATIONS.pop(self.uid,None)
+        app.write("UPDATE users SET upload_state='ready',upload_message='' WHERE id=?",(self.uid,))
+
+    def test_assigned_playlist_cannot_be_saved_empty(self):
+        ident=self.playlist();self.post('/api/playout',self.profile(playlist_id=ident))
+        self.post('/api/playlists/'+str(ident),{'name':'Empty','items':[]},409)
+        self.assertEqual(self.json.loads(app.rows('SELECT items FROM playlists WHERE id=?',(ident,))[0]['items']),[self.video])
+
+    def test_global_playlist_disable_stops_encoder_and_saves_position(self):
+        ident=self.playlist();self.post('/api/playout',self.profile(playlist_id=ident,delay_seconds=0))
+        program=app.MODEL.program(self.user);plan=app.PLAYLISTS.plan(self.user,program)
+        app.PLAYLISTS.start(self.user,program,plan)
+        app.PLAYLISTS.jobs[(self.uid,'main')]['progress'].write_text('out_time_us=1500000\n')
+        flags=app.SERVICES.flags();flags['playlists']=False;app.set_setting('service_policy',self.json.dumps(flags))
+        app.SERVICES.enforce_local()
+        self.assertNotIn((self.uid,'main'),app.PLAYLISTS.jobs)
+        self.assertAlmostEqual(app.rows('SELECT offset FROM playlist_positions WHERE user_id=?',(self.uid,))[0]['offset'],1.5)
+
+
+class UploadManagementTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        with patch.object(app.threading,'Thread'):
+            cls.uid=app.add_user('upload_user','Uploads-Fixture-Password-123')
+            cls.other=app.add_user('upload_other','Uploads-Fixture-Password-456')
+        app.write('UPDATE videos SET duration=3 WHERE user_id IN (?,?)',(cls.uid,cls.other))
+
+    def setUp(self):
+        self.client=app.app.test_client();self.headers={'X-CSRF-Token':'uploads'}
+        with self.client.session_transaction() as session:session.update(uid=self.uid,version=1,csrf='uploads',expert_mode=True)
+        self.user=app.rows('SELECT * FROM users WHERE id=?',(self.uid,))[0]
+        self.config=app.CONFIG.read_text()
+        self.path=app.DATA/'media'/'upload_user'/'fixture-extra.mp4';self.path.write_bytes(b'fixture-file')
+        self.vid=app.write('INSERT INTO videos(user_id,name,path,duration,size,created) VALUES (?,?,?,?,?,?)',(self.uid,'Original.mp4',str(self.path),3,12,app.time.time()))
+        app.write("UPDATE users SET upload_state='ready',upload_id='' WHERE id=?",(self.uid,))
+
+    def tearDown(self):
+        for key in list(app.PLAYLISTS.jobs):
+            if key[0]==self.uid:app.PLAYLISTS.jobs.pop(key,None)
+        for table in ('video_uploads','playlists','playlist_profiles','playlist_positions','playlist_output_state','routing_programs'):
+            app.write('DELETE FROM '+table+' WHERE user_id=?',(self.uid,))
+        for row in app.rows('SELECT id,path,rendered FROM videos WHERE user_id=? AND id!=?',(self.uid,self.user['selected_video_id'])):
+            for key in ('path','rendered'):
+                if row[key]:Path(row[key]).unlink(missing_ok=True)
+            app.write('DELETE FROM videos WHERE id=?',(row['id'],))
+        app.write("UPDATE users SET upload_state='ready',upload_id='' WHERE id=?",(self.uid,))
+        app.UPLOAD_RESERVATIONS.pop(self.uid,None);app.CONFIG.write_text(self.config)
+
+    def job(self,ident='fixture-upload-1234567890'):
+        app.UPLOADS.register(self.user,ident,'Original.mp4',12,'playlist',None)
+        app.write("UPDATE users SET upload_id=?,upload_state='processing' WHERE id=?",(ident,self.uid))
+        return ident
+
+    def test_progress_is_private_and_available_without_expert(self):
+        ident=self.job();app.UPLOADS.update(ident,self.uid,'processing',42,'Umwandlung läuft.')
+        with self.client.session_transaction() as session:session['expert_mode']=False
+        response=self.client.get('/api/uploads/'+ident)
+        self.assertEqual(response.status_code,200);self.assertEqual(response.json['progress'],42)
+        self.assertNotIn('user_id',response.json);self.assertNotIn('path',response.json)
+        other=app.app.test_client()
+        with other.session_transaction() as session:session.update(uid=self.other,version=1,csrf='other')
+        self.assertEqual(other.get('/api/uploads/'+ident).status_code,404)
+        self.assertFalse(other.get('/api/uploads').json['jobs'])
+        self.assertEqual(self.client.get('/api/status').json['upload']['progress'],42)
+
+    def test_duplicate_upload_request_does_not_schedule_conversion_twice(self):
+        ident='repeat-upload-1234567890'
+        def send(name='Original.mp4',body=b'fixture'):
+            return self.client.post('/api/playlists/upload',data={'upload_id':ident,'video':(io.BytesIO(body),name)},headers=self.headers)
+        with patch.object(app.JOBS,'submit') as submit:
+            first=send();self.assertEqual(first.status_code,200,first.json)
+            second=send();self.assertEqual(second.status_code,200,second.json)
+            self.assertEqual(first.json['upload_id'],second.json['upload_id']);self.assertEqual(submit.call_count,1)
+            Path(submit.call_args.args[2]).unlink(missing_ok=True)
+        self.assertEqual(send('Different.mp4').status_code,409)
+        self.assertEqual(len(app.rows('SELECT id FROM video_uploads WHERE user_id=?',(self.uid,))),1)
+
+    def test_rename_keeps_file_playlist_and_position(self):
+        import json
+        ident=app.write('INSERT INTO playlists(user_id,name,items) VALUES (?,?,?)',(self.uid,'Test playlist',json.dumps([self.vid])))
+        app.write('INSERT INTO playlist_positions(user_id,program,playlist_id,revision,offset) VALUES (?,?,?,?,?)',(self.uid,'main',ident,1,1.2))
+        app.PLAYLISTS.jobs[(self.uid,'main')]={'user_id':self.uid,'items':[self.vid],'videos':[{'id':self.vid,'name':'Original.mp4'}]}
+        response=self.client.post('/api/videos/'+str(self.vid)+'/rename',json={'name':'Neuer Name.mp4'},headers=self.headers)
+        self.assertEqual(response.status_code,200,response.json)
+        row=app.owned_video(self.user,self.vid);self.assertEqual(row['name'],'Neuer Name.mp4');self.assertEqual(row['path'],str(self.path));self.assertTrue(self.path.exists())
+        media=self.client.get('/media/video/'+str(self.vid));self.assertIn('Neuer Name.mp4',media.headers.get('Content-Disposition',''));media.close()
+        self.assertEqual(app.rows('SELECT revision,items FROM playlists WHERE id=?',(ident,))[0],{'revision':1,'items':json.dumps([self.vid])})
+        self.assertEqual(app.rows('SELECT offset FROM playlist_positions WHERE user_id=?',(self.uid,))[0]['offset'],1.2)
+        self.assertEqual(app.PLAYLISTS.jobs[(self.uid,'main')]['videos'][0]['name'],'Neuer Name.mp4')
+
+    def test_rename_rejects_foreign_invalid_names_and_missing_csrf(self):
+        foreign=app.rows('SELECT id FROM videos WHERE user_id=?',(self.other,))[0]['id']
+        self.assertEqual(self.client.post('/api/videos/'+str(foreign)+'/rename',json={'name':'No'},headers=self.headers).status_code,404)
+        for name in ('','a'*121,'bad\nname',None):
+            self.assertEqual(self.client.post('/api/videos/'+str(self.vid)+'/rename',json={'name':name},headers=self.headers).status_code,400)
+        self.assertEqual(self.client.post('/api/videos/'+str(self.vid)+'/rename',json={'name':'No'}).status_code,403)
+
+    def test_deletion_removes_confirmed_playlist_references(self):
+        import json
+        ident=app.write('INSERT INTO playlists(user_id,name,items) VALUES (?,?,?)',(self.uid,'Test playlist',json.dumps([self.vid,self.user['selected_video_id'],self.vid])))
+        data=self.client.get('/api/playlists').json
+        video=next(row for row in data['videos'] if row['id']==self.vid)
+        self.assertTrue(video['can_delete']);self.assertEqual(video['in_playlists'],['Test playlist'])
+        path='/api/videos/'+str(self.vid)+'/delete'
+        self.assertEqual(self.client.post(path,json={},headers=self.headers).status_code,409)
+        self.assertEqual(self.client.post(path,json={'remove_from_playlists':True},headers=self.headers).status_code,200)
+        self.assertFalse(self.path.exists())
+        self.assertEqual(json.loads(app.rows('SELECT items FROM playlists WHERE id=?',(ident,))[0]['items']),[self.user['selected_video_id']])
+        self.assertEqual(app.rows('SELECT revision FROM playlists WHERE id=?',(ident,))[0]['revision'],2)
+
+    def test_active_and_last_assigned_videos_are_protected(self):
+        import json
+        ident=app.write('INSERT INTO playlists(user_id,name,items) VALUES (?,?,?)',(self.uid,'Assigned',json.dumps([self.vid])))
+        app.write('INSERT INTO playlist_profiles(user_id,scope,playlist_id) VALUES (?,?,?)',(self.uid,'default',ident))
+        result=self.client.post('/api/videos/'+str(self.vid)+'/delete',json={'remove_from_playlists':True},headers=self.headers)
+        self.assertEqual(result.status_code,409);self.assertTrue(self.path.exists())
+        details=next(row for row in self.client.get('/api/playlists').json['videos'] if row['id']==self.vid)
+        self.assertFalse(details['can_delete']);self.assertIn('Letztes Video',details['delete_reason'])
+        app.PLAYLISTS.jobs[(self.uid,'main')]={'user_id':self.uid,'items':[self.vid],'videos':[]}
+        self.assertEqual(self.client.post('/api/videos/'+str(self.vid)+'/delete',json={'remove_from_playlists':True},headers=self.headers).status_code,409)
+
+    def test_upload_does_not_block_deleting_unrelated_idle_media(self):
+        self.job()
+        self.assertEqual(self.client.post('/api/videos/'+str(self.vid)+'/delete',json={},headers=self.headers).status_code,200)
+        self.assertFalse(self.path.exists())
+
+    def test_encoder_reports_measured_progress_and_caps_completion(self):
+        ident=self.job()
+        code="print('out_time_us=2500000');print('out_time_us=11000000')"
+        app.UPLOADS.encode([sys.executable,'-c',code],self.uid,ident,10,5)
+        job=app.UPLOADS.get(self.user,ident)
+        self.assertEqual(job['state'],'processing');self.assertEqual(job['progress'],99)
+        self.assertIsNone(job['video_id'])
+        app.UPLOADS.update(ident,self.uid,'ready',100,'Fertig',self.vid)
+        self.assertEqual(app.UPLOADS.get(self.user,ident)['progress'],100)
+
+    def test_encoder_timeout_is_enforced(self):
+        ident=self.job();started=app.time.monotonic()
+        with self.assertRaises(app.Error):app.UPLOADS.encode([sys.executable,'-c','import time;time.sleep(5)'],self.uid,ident,5,.1)
+        self.assertLess(app.time.monotonic()-started,2)
+
+    def test_interrupted_jobs_are_recoverable_with_error_status(self):
+        ident=self.job();app.UPLOADS.update(ident,self.uid,'processing',55,'Running')
+        app.UPLOADS.recover();job=app.UPLOADS.get(self.user,ident)
+        self.assertEqual(job['state'],'error');self.assertEqual(job['progress'],55)
+        self.assertIn('Serverneustart',job['message'])
+
+    def test_video_metadata_endpoint_is_private_and_has_no_storage_paths(self):
+        response=self.client.get('/api/videos/'+str(self.vid))
+        self.assertEqual(response.status_code,200);self.assertTrue(response.json['can_delete'])
+        self.assertNotIn('path',response.json);self.assertNotIn('user_id',response.json)
+        foreign=app.rows('SELECT id FROM videos WHERE user_id=?',(self.other,))[0]['id']
+        self.assertEqual(self.client.get('/api/videos/'+str(foreign)).status_code,404)

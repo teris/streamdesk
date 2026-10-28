@@ -12,6 +12,7 @@ Eine Sperre gilt für alle Benutzer einschließlich Administratoren. Auch ein ak
 | Plattformen & Chat | Discord-Bot | Einrichtung und Discord-Chat einschließlich Widget gesperrt. |
 | Medien | WebRTC | Browser-Kamera und WebRTC-Vorschau gesperrt; bestehende StreamDesk-Sitzungen schließen. |
 | Medien | Neue Aufnahmen | Manuelle Aufnahmen abschließen, native Aufnahmen pausieren; neue Aufnahmen gesperrt. |
+| Medien | Playlists | Playlist-Ausspielung und Verwaltung sperren; Medien, Regeln und Wiedergabepositionen bleiben erhalten. |
 | Medien | Playback & Clips | Segmentwiedergabe, Clip-Erzeugung und Clip-Verwaltung gesperrt. |
 | Medien | Öffentliche Zuschauerlinks | Gespeicherte öffentliche HLS-Links liefern während der Sperre keinen Player und keine Segmente. |
 | Erweiterungen | Zusätzliche Quellen & Routing | Zusätzliche Quellen und Ausgänge stilllegen; Routingänderungen und Szenen gesperrt. |

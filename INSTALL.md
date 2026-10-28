@@ -17,8 +17,8 @@ ZIP auf den Linux-Server übertragen und dort entpacken:
 ```bash
 apt-get update
 apt-get install -y unzip python3
-unzip streamdesk-1.1.6.zip
-cd streamdesk-1.1.6
+unzip streamdesk-1.1.8.zip
+cd streamdesk-1.1.8
 bash install.sh --help
 ```
 

@@ -97,3 +97,22 @@ Der Kontotest nutzt Chromium mit virtuellem WebAuthn-Authenticator auf `localhos
 ## Versionsnummern und Lieferpakete
 
 Jedes neue ausgelieferte Updatepaket erhält eine höhere Versionsnummer. Ein bereits geliefertes Paket wird nicht mit geänderten Funktionen unter derselben Versionsnummer ersetzt. Vor dem Packen VERSION erhöhen, neue Änderungen in einem eigenen CHANGELOG-Abschnitt erfassen und README sowie Installationsbeispiele angleichen. Anwendung und Installer lesen ihre Versionsnummer aus VERSION; Browsertests verwenden dieselbe Quelle.
+
+## Playlist-Integrationstest ab 1.1.7
+
+```bash
+.venv/bin/python tests/playlists_smoke.py \
+  --mediamtx /pfad/zu/mediamtx \
+  --ffmpeg /pfad/zu/ffmpeg \
+  --ffprobe /pfad/zu/ffprobe
+```
+
+Prüft echte Dauerschleifen, unterschiedliche Bilder an zwei lokalen Ausgängen, Source-1/2-Vorrang, gespeichertes Fortsetzen, durchgehende Aufnahme, zeitgesteuerten Start/Stopp, manuelle Stopps sowie Ordner-/Playlist-Oberfläche und Mobilansicht. Alle Ziele sind Loopback-Senken, keine öffentlichen Streamingkonten.
+
+## Upload- und Medienverwaltung ab 1.1.8
+
+```bash
+.venv/bin/python tests/uploads_smoke.py --ffmpeg /pfad/zu/ffmpeg --ffprobe /pfad/zu/ffprobe
+```
+
+Der Chromium-Test drosselt die lokale Upload-Verbindung und prüft Mehrfachauswahl, Upload-/Encoderfortschritt, Menüwechsel während der Warteschlange, Weiterverarbeitung nach fehlerhaftem Video, Umbenennen in beiden Bibliotheken, bestätigtes Entfernen von Playlist-Verweisen, geschützte Dateien und Mobilansichten. Es werden ausschließlich lokale Testdateien verwendet.
