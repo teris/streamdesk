@@ -1,0 +1,16 @@
+<section class="panel"><h2>Live hat immer Vorrang</h2><p>Playlists laufen hinter Source 2 oder weiteren zugeordneten Eingängen. Verfügbare echte Live-Quellen unterbrechen die Playlist sofort nach der normalen Quellenprüfung. Source 1/2 bleiben feste Live-Eingänge.</p><p class="small muted">Eigene Ausgangsregeln erlauben gleichzeitig unterschiedliche Playlists auf Twitch, YouTube und weiteren Anbietern. Die Regel des Ausgangs gilt zuerst, danach Regeln der zugeordneten Quellen, danach die allgemeine Regel. Einmaliges Anlegen einer Ausgangsregel benötigt einen gestoppten Ausgang.</p><a href="#playlists">Playlists &amp; Ordner verwalten →</a></section>
+<section class="panel"><h2>Ausspielregel</h2><form id="playlist-profile-form">
+    <label>Geltungsbereich<select id="playlist-scope"></select></label>
+    <label class="feature-check"><input id="playlist-profile-enabled" type="checkbox"> Regel aktivieren</label>
+    <label>Playlist nach einem Live-Ausfall<select id="playlist-fallback"></select></label>
+    <label>Vorher das normale Offline-Video zeigen (Minuten)<input id="playlist-delay" type="number" min="0" max="1440" value="10" step="1" required></label>
+    <p class="small muted">0 startet die Playlist sofort, 10 nach zehn Minuten ohne verfügbare zugeordnete Live-Quelle. „Keine Playlist“ lässt das normale Offline-Video als Fallback stehen.</p>
+    <fieldset data-service="automation" class="playlist-schedule-fields"><legend>Zeitgesteuerte Playlists</legend>
+        <label>Zeitzone<input id="playlist-timezone" value="Europe/Berlin" maxlength="80" required list="playlist-zones"></label><datalist id="playlist-zones"><option value="Europe/Berlin"><option value="UTC"></datalist>
+        <p class="small muted">Zeitfenster starten ihre Playlist ohne die Fallback-Verzögerung. 12:00–00:00 geht über Mitternacht; 00:00–00:00 bedeutet den ganzen Tag. Zeitfenster desselben Bereichs dürfen sich nicht überschneiden.</p>
+        <div id="playlist-schedules"></div><button class="ghost" id="playlist-add-schedule" type="button">Zeitfenster ergänzen</button>
+        <label class="feature-check"><input id="playlist-auto-start" type="checkbox"> Betroffene Streaming-Ausgänge automatisch starten</label>
+        <p class="small muted">Allgemeine/Quellenregeln starten nur ausgewählte Ziele; Ausgangsregeln nur ihren eigenen Ausgang. Automatisch gestartete Ausgänge enden am Ende des letzten Zeitfensters. Manuell gestartete Ausgänge laufen weiter. Ein manueller Stopp sperrt den automatischen Neustart im aktuellen Zeitfenster.</p>
+    </fieldset>
+    <button class="primary">Ausspielregel speichern</button>
+</form></section>

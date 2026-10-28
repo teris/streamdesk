@@ -4,6 +4,7 @@
     <a href="#expert-routing" data-expert-only {% if not expert %}hidden{% endif %}>Quellen &amp; Routing</a>
     <a href="#expert-outputs" data-expert-only {% if not expert %}hidden{% endif %}>Ausgänge &amp; Konten</a>
     <a href="#expert-recording" data-expert-only {% if not expert %}hidden{% endif %}>Native Aufnahme</a>
+    <a href="#expert-playlists" data-expert-only {% if not expert %}hidden{% endif %}>Playlist-Ausspielung</a>
     <a href="#expert-playback" data-expert-only {% if not expert %}hidden{% endif %}>Playback</a>
     <a href="#expert-viewers" data-expert-only {% if not expert %}hidden{% endif %}>Zuschauerfreigabe</a>
     <a href="#expert-renewal" data-expert-only {% if not expert %}hidden{% endif %}>Neuverbindung</a>
@@ -21,6 +22,7 @@
             <a href="#expert-routing"><strong>Quellen &amp; Routing</strong><span>Quellen einzeln verwalten, Prioritäten und Ziele zuordnen</span></a>
             <a href="#expert-outputs"><strong>Ausgänge &amp; Konten</strong><span>Zusätzliche Konten, Anbieter und einzelne Ausgänge verwalten</span></a>
             <a href="#expert-recording"><strong>Native Aufnahme</strong><span>Format, Segmente und Aufbewahrung</span></a>
+            <a href="#expert-playlists"><strong>Playlist-Ausspielung</strong><span>Fallback, Zeitpläne und eigene Playlists je Ausgang</span></a>
             <a href="#expert-playback"><strong>Playback</strong><span>Eigene Aufnahmesegmente zeitversetzt abspielen</span></a>
             <a href="#expert-viewers"><strong>Zuschauerfreigabe</strong><span>Öffentlichen Player freigeben oder widerrufen</span></a>
             <a href="#expert-renewal"><strong>Neuverbindung</strong><span>Verbindungsintervalle und manuelles Erneuern</span></a>
@@ -39,3 +41,5 @@
 <section class="app-view" data-view="expert-discord" data-expert-view aria-label="Discord-Bot einrichten" hidden>{% include 'features-discord.html' %}</section>
 
 <section class="app-view" data-view="expert-outputs" data-expert-view aria-label="Ausgänge und Konten" hidden>{% include 'features-outputs.html' %}</section>
+
+<section class="app-view" data-view="expert-playlists" data-expert-view aria-label="Playlist-Ausspielung und Zeitpläne" hidden>{% include 'playlist-playout.html' %}</section>

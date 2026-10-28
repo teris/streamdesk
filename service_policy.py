@@ -12,6 +12,7 @@ CATALOG = (
     ('discord', 'Plattformen & Chat', 'Discord-Bot', 'Bot-Einrichtung, Discord-Chat und Discord im Widget.'),
     ('webrtc', 'Medien', 'WebRTC', 'Browser-Kamera und WebRTC-Vorschau. Die HLS-Programmvorschau bleibt verfügbar.'),
     ('recording', 'Medien', 'Neue Aufnahmen', 'Manuelle Programm-/Quellenaufnahme und native MediaMTX-Aufnahme. Vorhandene Dateien bleiben erhalten.'),
+    ('playlists', 'Medien', 'Playlists', 'Video-Playlists, Offline-Fallback und zeitgesteuerte Ausspielung. Gespeicherte Medien und Regeln bleiben erhalten.'),
     ('playback', 'Medien', 'Playback & Clips', 'Zeitversetzte Segmentwiedergabe und Clip-Verwaltung.'),
     ('viewers', 'Medien', 'Öffentliche Zuschauerlinks', 'Öffentliche HLS-Player. Gespeicherte Links bleiben erhalten, sind während der Sperre unbenutzbar.'),
     ('advanced_routing', 'Erweiterungen', 'Zusätzliche Quellen & Routing', 'Weitere Quellen und Konten, Routingänderungen und Szenen. Source 1 und 2 bleiben verfügbar.'),
@@ -86,7 +87,7 @@ class ServicePolicy:
             if not path.startswith('/watch/') and not c.current():
                 return
             requirements = []
-            for prefix, key in (('/oauth/twitch', 'twitch'), ('/api/twitch/', 'twitch'),
+            for prefix, key in (('/api/playlists', 'playlists'), ('/api/playlist-folders', 'playlists'), ('/api/playout', 'playlists'),('/oauth/twitch', 'twitch'), ('/api/twitch/', 'twitch'),
                                 ('/oauth/youtube', 'youtube'), ('/api/youtube/', 'youtube'),
                                 ('/api/discord', 'discord'), ('/api/routing', 'advanced_routing'),
                                 ('/api/custom-outputs', 'advanced_routing'), ('/api/scenes', 'advanced_routing'),
@@ -206,6 +207,11 @@ class ServicePolicy:
                     users = {uid for uid, service in c.CHAT.workers if service == platform}
                 for uid in users:
                     c.CHAT.stop_platform(uid, platform, clear=False)
+        if hasattr(c, 'PLAYLISTS'):
+            from routing_model import job_key
+            for job in list(c.PLAYLISTS.jobs.values()):
+                if not flags['playlists'] or not flags['automation'] and job.get('scheduled'):
+                    c.ENGINE.stop_relay(job_key({'id':job['user_id']}, job['program']))
         if not flags['recording']:
             for uid in list(c.ENGINE.recorders):
                 c.ENGINE.stop_record(uid, 'Aufnahmedienst durch Administration gesperrt.')

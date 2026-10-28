@@ -450,6 +450,10 @@ def initialize():
                 connection.execute('UPDATE users SET selected_video_id=? WHERE id=?', (video_id, user['id']))
 
     MODEL.migrate()
+    from playlist_features import migrate
+    migrate(sys.modules[__name__])
+    from upload_features import migrate as migrate_uploads
+    migrate_uploads(sys.modules[__name__])
 
 
 def add_user(username, password, admin=False, legacy=False):
@@ -752,7 +756,7 @@ def status(user):
                                if SERVICES.source_allowed(row)]
         program_status = {row['id']:row for row in snapshot.get('programs',[])}
         snapshot['programs'] = [dict(row,**{key:program_status.get(row['id'],{}).get(key,value) for key,value in
-            (('available',False),('selected_source',None),('offline_playing',False),('browser_status','off'))},
+            (('available',False),('selected_source',None),('offline_playing',False),('browser_status','off'),('playlist',None))},
             preview_url=PUBLIC+'/program/'+row['id']+'/',webrtc_url=PUBLIC+'/webrtc/3/play/?program='+row['id'])
             for row in MODEL.programs(user)]
         selected = rows('SELECT id,name,LENGTH(browser_url)>0 AS browser_enabled FROM videos WHERE id=? AND user_id=?',(user['selected_video_id'],user['id']))
@@ -777,7 +781,7 @@ def status(user):
             outputs=outputs,chat=CHAT.info(user),record_sources=MODEL.record_sources(user),
             oauth_ready=bool(setting('client_id') and setting('client_secret')),
             twitch_edit_ready=bool(rows('SELECT user_id FROM twitch_auth WHERE user_id=?',(user['id'],))),
-            upload={'state':user['upload_state'],'message':user['upload_message']},
+            upload=UPLOADS.summary(user),
             limits={'browser_limit':browser_capacity(),'browser_fps':browser_fps(),'upload_mb':500},public_url=PUBLIC)
 
 
@@ -887,7 +891,7 @@ def public_https(url, **kwargs):
     return open_public_https(url, resolver=resolve_host_ips, blocked=ingest_ips(), **kwargs)
 
 
-def forward(user, enable, kind=None):
+def forward(user, enable, kind=None, origin="manual"):
     with LOCK:
         if enable and kind is not None:
             SERVICES.require_output(kind)
@@ -928,6 +932,8 @@ def forward(user, enable, kind=None):
         if not endpoints:
             update_stream_time(user, 'stopped', False)
         write('UPDATE users SET renew_next=0,renew_resume=0 WHERE id=?', (user['id'],))
+        if origin == 'manual':
+            PLAYLISTS.manual_control(user, kind)
 
 
 @app.post('/api/start')
@@ -1202,42 +1208,58 @@ def password(user):
     return jsonify(ok=True)
 
 
-def convert(uid, upload, display_name):
+def convert(uid, upload, display_name, max_duration=300, folder_id=None, upload_id=None):
     user = rows('SELECT * FROM users WHERE id=?', (uid,))[0]
     destination = Path(user['offline']).parent / ('offline-' + secrets.token_hex(8) + '.mp4')
     try:
         write("UPDATE users SET upload_state='processing',upload_message='Video wird in 1080p30 / H.264 / AAC umgewandelt …' WHERE id=?", (uid,))
+        UPLOADS.update(upload_id,uid,'checking',0,'Videodatei wird geprüft.')
         probe = subprocess.run(['ffprobe', '-v', 'error', '-protocol_whitelist', 'file,pipe', '-show_format', '-show_streams', '-of', 'json', str(upload)],
                                capture_output=True, timeout=20, text=True)
         meta = json.loads(probe.stdout)
-        if not any(x.get('codec_type') == 'video' for x in meta['streams']) or not 0 < float(meta['format']['duration']) <= 300:
-            raise Error('Das Video muss eine Videospur enthalten und höchstens fünf Minuten lang sein.')
+        if not any(x.get('codec_type') == 'video' for x in meta['streams']) or not 0 < float(meta['format']['duration']) <= max_duration:
+            raise Error(f'Das Video muss eine Videospur enthalten und höchstens {max_duration//60} Minuten lang sein.')
+        duration = float(meta['format']['duration'])
+        with LOCK:
+            estimate = int(duration * 650000)
+            others = sum(value for key,value in UPLOAD_RESERVATIONS.items() if key != uid)
+            if shutil.disk_usage(DATA).free - others < estimate + 350*1048576:
+                raise Error('Für die umgewandelte Videodatei ist zu wenig Speicher verfügbar.')
+            UPLOAD_RESERVATIONS[uid] = estimate
         audio = '0:a:0' if any(x.get('codec_type') == 'audio' for x in meta['streams']) else '1:a:0'
-        command = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-nostdin', '-protocol_whitelist', 'file,pipe', '-i', str(upload),
+        UPLOADS.update(upload_id,uid,'processing',0,'Video wird umgewandelt.')
+        command = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-nostdin', '-progress', 'pipe:1', '-stats_period', '0.25', '-protocol_whitelist', 'file,pipe', '-i', str(upload),
                    '-f', 'lavfi', '-i', 'anullsrc=r=48000:cl=stereo', '-map', '0:v:0', '-map', audio,
                    '-vf', 'scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30',
                    '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'zerolatency', '-threads', '1', '-profile:v', 'high', '-pix_fmt', 'yuv420p',
                    '-b:v', '4500k', '-maxrate', '4500k', '-bufsize', '9000k', '-g', '60', '-keyint_min', '60', '-sc_threshold', '0',
                    '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2', '-shortest', '-movflags', '+faststart', str(destination)]
-        result = subprocess.run(command, capture_output=True, timeout=600)
-        if result.returncode:
-            raise Error('Das Video konnte nicht umgewandelt werden. Bitte eine normale MP4-Datei verwenden.')
-        with LOCK:
-            write('INSERT INTO videos(user_id,name,path,duration,size,created) VALUES (?,?,?,?,?,?)',
-                  (uid, display_name, str(destination), float(meta['format']['duration']), destination.stat().st_size, int(time.time())))
-            write("UPDATE users SET upload_state='ready',upload_message='Video ist in deiner Bibliothek. Zum Senden auswählen.' WHERE id=?", (uid,))
+        UPLOADS.encode(command,uid,upload_id,duration,max(600,min(30000,int(duration*4+120))))
+        with LOCK, db() as connection:
+            folder = folder_id if connection.execute('SELECT id FROM playlist_folders WHERE id=? AND user_id=?',(folder_id,uid)).fetchone() else None
+            video_id = connection.execute('INSERT INTO videos(user_id,name,path,duration,size,created,folder_id) VALUES (?,?,?,?,?,?,?)',
+                  (uid, display_name, str(destination), duration, destination.stat().st_size, int(time.time()), folder)).lastrowid
+            connection.execute("UPDATE users SET upload_state='ready',upload_message='Video ist in deiner Bibliothek. Zum Senden auswählen.' WHERE id=?",(uid,))
+            UPLOADS.update(upload_id,uid,'ready',100,'Video ist bereit.',video_id,connection)
     except Exception as exc:
         destination.unlink(missing_ok=True)
+        UPLOADS.update(upload_id,uid,'error',0,str(exc) if isinstance(exc, Error) else 'Video konnte nicht verarbeitet werden.')
         write("UPDATE users SET upload_state='error',upload_message=? WHERE id=?", (str(exc) if isinstance(exc, Error) else 'Video konnte nicht verarbeitet werden.', uid))
     finally:
         upload.unlink(missing_ok=True)
         with LOCK:
-            UPLOAD_RESERVATIONS.pop(uid, None)
+            current_job=rows('SELECT upload_id FROM users WHERE id=?',(uid,))
+            if not upload_id or current_job and current_job[0]['upload_id']==upload_id:
+                UPLOAD_RESERVATIONS.pop(uid, None)
 
 
 @app.post('/api/upload')
 @login_required
 def upload(user):
+    return accept_upload(user)
+
+
+def accept_upload(user, max_duration=300, folder_id=None):
     file = request.files.get('video')
     if not file or not file.filename.lower().endswith('.mp4'):
         raise Error('Bitte eine MP4-Datei auswählen.')
@@ -1246,36 +1268,57 @@ def upload(user):
     file.stream.seek(0)
     if incoming_size > UPLOAD_LIMIT:
         raise Error('Maximal 500 MB pro Datei.')
+    upload_id = request.form.get('upload_id') or secrets.token_urlsafe(24)
+    if not re.fullmatch(r'[A-Za-z0-9_-]{16,80}',upload_id):raise Error('Ungültige Upload-Kennung.')
+    name = ''.join(char if char.isprintable() else ' ' for char in Path(file.filename).name)[:120].strip() or 'Video.mp4'
+    kind = 'playlist' if max_duration>300 else 'offline'
     with LOCK:
+        repeated=rows('SELECT * FROM video_uploads WHERE id=?',(upload_id,))
+        if repeated:
+            row=repeated[0]
+            if row['user_id']!=user['id']:raise Error('Upload nicht gefunden.',http_status=404)
+            if (row['filename'],row['size'],row['kind'],row['folder_id'])!=(name,incoming_size,kind,folder_id):raise Error('Diese Upload-Kennung gehört zu einer anderen Datei.',http_status=409)
+            if row['state']=='error':raise Error('Für einen neuen Versuch bitte eine neue Upload-Kennung verwenden.',http_status=409)
+            return jsonify(ok=True,upload_id=upload_id)
         fresh = rows('SELECT upload_state FROM users WHERE id=?', (user['id'],))[0]
         if fresh['upload_state'] in ('queued', 'processing'):
-            raise Error('Dein vorheriges Video wird noch verarbeitet.')
+            return jsonify(error='Dein vorheriges Video wird noch verarbeitet.',code='upload_busy'),409
         if len(rows("SELECT id FROM users WHERE upload_state IN ('queued','processing')")) >= 2:
-            raise Error('Der Server verarbeitet bereits zwei Videos. Bitte später erneut versuchen.')
+            return jsonify(error='Der Server verarbeitet bereits zwei Videos. Bitte kurz warten.',code='upload_busy'),429
         if shutil.disk_usage(DATA).free - sum(UPLOAD_RESERVATIONS.values()) < incoming_size + 350 * 1024 * 1024:
             raise Error('Auf dem Server ist zu wenig freier Speicher.')
-        UPLOAD_RESERVATIONS[user['id']] = incoming_size
-        write("UPDATE users SET upload_state='queued',upload_message='Upload wird empfangen …' WHERE id=?", (user['id'],))
+        try:
+            UPLOADS.register(user,upload_id,name,incoming_size,kind,folder_id)
+            write("UPDATE users SET upload_state='queued',upload_message='Upload wird empfangen …',upload_id=? WHERE id=?", (upload_id,user['id']))
+            UPLOAD_RESERVATIONS[user['id']] = incoming_size
+        except Exception:
+            UPLOADS.update(upload_id,user['id'],'error',0,'Upload konnte nicht vorbereitet werden.')
+            raise
     directory = DATA / 'uploads'
-    directory.mkdir(exist_ok=True)
     target = directory / (secrets.token_hex(16) + '.mp4')
     submitted = False
     try:
+        directory.mkdir(exist_ok=True)
         file.save(target)
         if target.stat().st_size > UPLOAD_LIMIT:
             raise Error('Maximal 500 MB pro Datei.')
         write("UPDATE users SET upload_state='queued',upload_message='Video wartet auf Verarbeitung …' WHERE id=?", (user['id'],))
-        JOBS.submit(convert, user['id'], target, Path(file.filename).name[:120])
+        if max_duration != 300 or folder_id is not None:
+            JOBS.submit(convert, user['id'], target, name, max_duration, folder_id, upload_id=upload_id)
+        else:
+            JOBS.submit(convert, user['id'], target, name, upload_id=upload_id)
         submitted = True
     except Exception:
         target.unlink(missing_ok=True)
+        UPLOADS.update(upload_id,user['id'],'error',0,'Upload fehlgeschlagen.')
         write("UPDATE users SET upload_state='error',upload_message='Upload fehlgeschlagen.' WHERE id=?", (user['id'],))
         raise
     finally:
         if not submitted:
             with LOCK:
-                UPLOAD_RESERVATIONS.pop(user['id'], None)
-    return jsonify(ok=True)
+                current_job=rows('SELECT upload_id FROM users WHERE id=?',(user['id'],))
+                if current_job and current_job[0]['upload_id']==upload_id:UPLOAD_RESERVATIONS.pop(user['id'], None)
+    return jsonify(ok=True,upload_id=upload_id)
 
 
 @app.get('/api/admin')
@@ -1300,6 +1343,7 @@ def owned_video(user, vid):
 @login_required
 def library(user):
     videos = rows('SELECT id,name,duration,size,created,overlay_text,overlay_style,browser_url FROM videos WHERE user_id=? ORDER BY created DESC,id DESC', (user['id'],))
+    PLAYLISTS.media_details(user,videos)
     for video in videos:
         video['overlay_style'] = {**TEXT_DEFAULTS, **json.loads(video['overlay_style'] or '{}')}
         url = decrypt(video.pop('browser_url'))
@@ -1502,7 +1546,9 @@ def renewal_now(user):
 def video_file(user, vid):
     video = owned_video(user, vid)
     path = video['path'] if request.args.get('original') == '1' else video['rendered'] or video['path']
-    return send_file(path, mimetype='video/mp4', conditional=True)
+    name = ''.join(char if char.isprintable() else ' ' for char in video['name']).strip() or 'Video'
+    if not name.lower().endswith('.mp4'):name += '.mp4'
+    return send_file(path, mimetype='video/mp4', conditional=True, download_name=name)
 
 
 @app.post('/api/videos/<int:vid>/select')
@@ -1527,23 +1573,65 @@ def select_video(user, vid):
     return jsonify(ok=True)
 
 
+@app.get('/api/videos/<int:vid>')
+@login_required
+def video_details(user, vid):
+    video = owned_video(user, vid)
+    data = {key:video[key] for key in ('id','name','duration','size')}
+    return jsonify(**PLAYLISTS.media_details(user,[data])[0])
+
+
+@app.post('/api/videos/<int:vid>/rename')
+@login_required
+def rename_video(user, vid):
+    body = FEATURES.body()
+    name = body.get('name')
+    if not isinstance(name,str) or not 1 <= len(name.strip()) <= 120 or any(ord(char)<32 for char in name):
+        raise Error('Bitte einen Videonamen mit 1–120 Zeichen eingeben.')
+    with LOCK:
+        owned_video(user,vid)
+        write('UPDATE videos SET name=? WHERE id=? AND user_id=?',(name.strip(),vid,user['id']))
+        for job in PLAYLISTS.jobs.values():
+            if job['user_id']==user['id']:
+                for item in job['videos']:
+                    if item['id']==vid:item['name']=name.strip()
+    return jsonify(ok=True)
+
+
 @app.post('/api/videos/<int:vid>/delete')
 @login_required
 def delete_video(user, vid):
     with LOCK:
         user = rows('SELECT * FROM users WHERE id=?', (user['id'],))[0]
         video = owned_video(user, vid)
+        if PLAYLISTS.video_referenced(user, vid, active_only=True):
+            raise Error('Dieses Video gehört zu einer laufenden Playlist. Bitte die Wiedergabe zuerst pausieren.', http_status=409)
         if user['selected_video_id'] == vid:
-            raise Error('Bitte zuerst ein anderes Offline-Video auswählen. Das ausgewählte Video kann nicht gelöscht werden.')
-        if user['upload_state'] in ('queued', 'processing'):
-            raise Error('Bitte die laufende Videoverarbeitung abwarten.')
+            raise Error('Bitte zuerst ein anderes Offline-Video auswählen. Das ausgewählte Video kann nicht gelöscht werden.', http_status=409)
+        if user['upload_state'] in ('queued', 'processing') and not user.get('upload_id'):
+            raise Error('Bitte die laufende Videoverarbeitung abwarten.', http_status=409)
+        references = [row for row in rows('SELECT * FROM playlists WHERE user_id=?',(user['id'],)) if vid in json.loads(row['items'])]
+        body = request.get_json(silent=True) or {}
+        if references and (not isinstance(body,dict) or body.get('remove_from_playlists') is not True):
+            raise Error('Das Video ist in Playlists enthalten. Entfernen aus den Playlists beim Löschen ausdrücklich bestätigen.', http_status=409)
+        assigned = PLAYLISTS.assigned_ids(user)
+        changes = []
+        for row in references:
+            remaining = [item for item in json.loads(row['items']) if item!=vid]
+            if not remaining and row['id'] in assigned:
+                raise Error('Das letzte Video einer zugeordneten Playlist kann nicht gelöscht werden. Bitte zuerst die Ausspielregel anpassen.', http_status=409)
+            changes.append((json.dumps(remaining),row['id'],user['id']))
         # Only files inside the authenticated user's media directory can be removed.
         for filename in (video['path'], video['rendered']):
             if filename:
                 path = Path(filename)
                 if path.parent == DATA / 'media' / user['username']:
                     path.unlink(missing_ok=True)
-        write('DELETE FROM videos WHERE id=? AND user_id=?', (vid, user['id']))
+        with db() as connection:
+            for args in changes:
+                connection.execute('UPDATE playlists SET items=?,revision=revision+1 WHERE id=? AND user_id=?',args)
+            connection.execute('DELETE FROM videos WHERE id=? AND user_id=?',(vid,user['id']))
+            connection.execute("UPDATE video_uploads SET video_id=NULL,message='Video wurde gelöscht.' WHERE user_id=? AND video_id=?",(user['id'],vid))
     return jsonify(ok=True)
 
 
@@ -1590,6 +1678,8 @@ def render_overlay(uid, vid, text, style):
 @app.post('/api/videos/<int:vid>/overlay')
 @login_required
 def overlay(user, vid):
+    if PLAYLISTS.video_referenced(user, vid, active_only=True):
+        raise Error('Bitte die laufende Playlist vor dem Neuberechnen dieses Videos pausieren.', http_status=409)
     with LOCK:
         user = rows('SELECT * FROM users WHERE id=?', (user['id'],))[0]
         owned_video(user, vid)
@@ -1620,7 +1710,7 @@ def overlay(user, vid):
             raise Error('Maximal 200 Zeichen, drei Zeilen und 65 Zeichen pro Zeile.')
         if shutil.disk_usage(DATA).free < 600 * 1024 * 1024:
             raise Error('Zu wenig Speicher für die Text-Version.')
-        write("UPDATE users SET upload_state='processing',upload_message='Text wird einmalig ins Video eingerechnet …' WHERE id=?", (user['id'],))
+        write("UPDATE users SET upload_id='',upload_state='processing',upload_message='Text wird einmalig ins Video eingerechnet …' WHERE id=?", (user['id'],))
         JOBS.submit(render_overlay, user['id'], vid, text, style)
     return jsonify(ok=True)
 
@@ -2012,6 +2102,7 @@ class Engine:
             return False
 
     def stop_relay(self, uid):
+        if 'PLAYLISTS' in globals():PLAYLISTS.checkpoint(uid, pause=True)
         previous = self.relays.pop(uid, None)
         job = self.browser_jobs.pop(uid, None)
         if job and (previous or job.get('process')):
@@ -2126,6 +2217,9 @@ class Engine:
         local_demand = bool(live.get('readers')) or bool(config['paths'].get(program['path'],{}).get('record'))
         active_record = rows("SELECT source FROM recordings WHERE user_id=? AND status='recording'",(user['id'],))
         local_demand = local_demand or any(row['source']==('live' if program['id']=='main' else program['id']) for row in active_record)
+        plan, playlist_eligible = PLAYLISTS.decision(user, program, bool(healthy), enabled or local_demand, now)
+        PLAYLISTS.automatic(user, program, plan, playlist_eligible, config, now, live=bool(healthy))
+        enabled = any(config['paths'].get(output_path(user,kind),{}).get('forward') for kind in program['targets'])
         if program['id']!='main' and not (enabled or local_demand):
             healthy = []
         offline_allowed = bool(program['sources']) and (enabled or local_demand)
@@ -2133,9 +2227,12 @@ class Engine:
             offline_allowed = False
         def choose():
             source = next((name for name in healthy if now>=self.retry.get((key,name),0)),None)
+            if source is None and offline_allowed and playlist_eligible:
+                candidate='@playlist:'+str(plan['playlist']['id'])+':'+str(plan['playlist']['revision'])
+                if now>=self.retry.get((key,candidate),0):source=candidate
             if source is None and offline_allowed and now>=self.retry.get((key,offline_key),0):
                 source=offline_key
-            if source and browser_url and not other_browser and now>=self.retry.get((key,'@browser:'+source),0):
+            if source and not source.startswith('@playlist:') and browser_url and not other_browser and now>=self.retry.get((key,'@browser:'+source),0):
                 return '@browser:'+source
             return source
         desired = choose()
@@ -2157,12 +2254,19 @@ class Engine:
                     except Exception:
                         self.retry[(key,desired)] = now+max(30,policy['retry_seconds']);browser_status='error'
                 else:
-                    input_args = ['-re','-stream_loop','-1','-i',user['offline']] if desired.startswith('@offline:') else [
+                    playlist_input = desired.startswith('@playlist:')
+                    progress_args = []
+                    if playlist_input:
+                        try:input_args, progress_args = PLAYLISTS.start(user, program, plan)
+                        except (Error, OSError):
+                            self.retry[(key,desired)] = now+max(5,policy['retry_seconds'])
+                            return {'id':program['id'],'selected_source':None,'offline_playing':True,'available':bool(live.get('available')),'browser_status':'off','playlist':{'active':False,'error':'Playlist nicht verfügbar; Offline-Fallback folgt.'}}
+                    else:input_args = ['-re','-stream_loop','-1','-i',user['offline']] if desired.startswith('@offline:') else [
                         '-rtsp_transport','tcp','-timeout','15000000','-analyzeduration','1000000','-probesize','1000000','-i',RTSP+desired]
-                    has_audio=desired.startswith('@offline:') or path_has_audio(all_paths.get(desired,{}))
+                    has_audio=playlist_input or desired.startswith('@offline:') or path_has_audio(all_paths.get(desired,{}))
                     if not has_audio:
                         input_args += ['-f','lavfi','-i','anullsrc=r=48000:cl=stereo']
-                    command = ['ffmpeg','-hide_banner','-nostdin','-loglevel','error']+input_args+[
+                    command = ['ffmpeg','-hide_banner','-nostdin','-loglevel','error']+progress_args+input_args+[
                         '-map','0:v:0','-map','0:a:0?' if has_audio else '1:a:0',
                         '-vf','scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30',
                         '-c:v','libx264','-preset','veryfast','-tune','zerolatency','-profile:v','baseline',
@@ -2176,13 +2280,14 @@ class Engine:
         actual = current[0] if current and live.get('online') else None
         actual_source = actual[len('@browser:'):] if actual and actual.startswith('@browser:') else actual
         selected_source = next((source for source in program['sources'] if actual_source == user['prefix']+('replay' if source=='source1' and user['replay_recording_id'] else source)),None)
-        offline_playing = bool(actual_source and actual_source.startswith('@offline:'))
+        offline_playing = bool(actual_source and actual_source.startswith(('@offline:','@playlist:')))
+        PLAYLISTS.checkpoint(key)
         if browser_url and actual and actual.startswith('@browser:'):
             browser_status = 'live'
         elif browser_url and not healthy and now<self.retry.get((key,offline_key),0):
             browser_status = 'error'
         return {'id':program['id'],'selected_source':selected_source,'offline_playing':offline_playing,
-                'available':bool(live.get('available')),'browser_status':browser_status}
+                'available':bool(live.get('available')),'browser_status':browser_status,'playlist':PLAYLISTS.describe(key,plan,bool(healthy))}
 
     def tick(self):
         with LOCK:
@@ -2352,6 +2457,10 @@ from integrations import install_integrations
 CHAT = install_integrations(sys.modules[__name__])
 from media_features import MediaFeatures
 FEATURES = MediaFeatures(sys.modules[__name__])
+from playlist_features import PlaylistFeatures
+PLAYLISTS = PlaylistFeatures(sys.modules[__name__])
+from upload_features import UploadFeatures
+UPLOADS = UploadFeatures(sys.modules[__name__])
 from account_features import install_account_routes
 install_account_routes(sys.modules[__name__])
 if os.getenv('STREAMDESK_ENGINE', '1') == '1':
@@ -2361,6 +2470,7 @@ if os.getenv('STREAMDESK_ENGINE', '1') == '1':
         for directory in runtime.iterdir():
             if directory.is_dir() and re.fullmatch(r'[a-f0-9]{24}', directory.name):
                 shutil.rmtree(directory, ignore_errors=True)
+    UPLOADS.recover()
     write("UPDATE users SET upload_state='error',upload_message='Verarbeitung wurde durch einen Neustart unterbrochen.' WHERE upload_state IN ('queued','processing')")
     write('UPDATE twitch_auth SET validated=0')
     write('UPDATE users SET replay_recording_id=NULL')

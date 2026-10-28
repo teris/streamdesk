@@ -96,7 +96,7 @@ def main():
                 context.add_cookies([{'name':'session','value':client.get_cookie('session').value,'url':address}])
                 page=context.new_page();errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
                 # Navigate away and back: this used to leave the iframe on about:blank.
-                page.goto(address+'/#settings');page.wait_for_selector('#theme-form')
+                page.goto(address+'/#settings-appearance');page.wait_for_selector('#theme-form')
                 page.click('a.menu-link[href="#dashboard"]')
                 page.wait_for_function("() => document.querySelector('#source3 iframe').getAttribute('src') === '/program/main/'")
                 frame=page.frame_locator('#source3 iframe')

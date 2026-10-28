@@ -21,6 +21,7 @@
     const current=data.programs?.find(row=>row.id===pid),preview=find('#source3 iframe'),toggle=find('#source3 .preview-toggle');
     const url=current?.preview_url||data.public_url+'/program/main/';
     find('#program-link').value=url;find('#program-link-open').href=url;
+    const pl=current?.playlist;if(find('#program-playout'))find('#program-playout').textContent=pl?.active?'▷ '+pl.name+' · '+pl.video+' · Position '+Math.floor(pl.offset)+' s':pl?.paused?'Live hat Vorrang · '+pl.name+' pausiert':pl?.error||'';
     find('#program-webrtc-open').href=current?.webrtc_url||data.public_url+'/webrtc/3/play/';
     find('#program-webrtc-open').hidden=!data.expert_mode;
     find('#program-route').textContent='Priorität: '+chain(current?.sources||['source1','source2'])+(current?.sources?.length?' → Offline-Video':'');

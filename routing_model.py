@@ -26,11 +26,12 @@ def job_key(user, program):
     return user['id'] if program == 'main' else (user['id'], program)
 
 
-def program_id(sources):
+def program_id(sources, playlist_scope=""):
     members = sorted(set(sources))
-    if members == DEFAULT_KEYS:
+    if members == DEFAULT_KEYS and not playlist_scope:
         return 'main'
-    return 'route-' + hashlib.sha256(json.dumps(members, separators=(',', ':')).encode()).hexdigest()[:12]
+    value = [members, playlist_scope] if playlist_scope else members
+    return 'route-' + hashlib.sha256(json.dumps(value, separators=(',', ':')).encode()).hexdigest()[:12]
 
 
 class RoutingModel:
@@ -155,23 +156,31 @@ class RoutingModel:
         if any(key not in allowed for key in sources):
             raise c.Error('Die Zuordnung enthält eine fremde oder gelöschte Quelle.', http_status=404)
         canonical = sorted(sources)
-        pid = program_id(canonical)
+        scope = self.playlist_scope(user, kind)
+        pid = program_id(canonical, scope)
         with c.db() as connection:
             connection.execute('INSERT INTO output_routing(user_id,kind,sources) VALUES (?,?,?) ON CONFLICT(user_id,kind) DO UPDATE SET sources=excluded.sources',
                                (user['id'],kind,json.dumps(canonical)))
             if pid != 'main':
-                connection.execute('INSERT OR IGNORE INTO routing_programs(user_id,id,sources) VALUES (?,?,?)',
-                                   (user['id'],pid,json.dumps(canonical)))
+                connection.execute('INSERT OR IGNORE INTO routing_programs(user_id,id,sources,playlist_scope) VALUES (?,?,?,?)',
+                                   (user['id'],pid,json.dumps(canonical),scope))
         return pid
+
+    def playlist_scope(self, user, kind):
+        return 'output:'+kind if self.c.rows('SELECT 1 FROM playlist_profiles WHERE user_id=? AND scope=?',(user['id'],'output:'+kind)) else ''
 
     def programs(self, user, archived=False):
         definitions = {'main':list(DEFAULT_KEYS)}
-        for row in self.c.rows('SELECT id,sources FROM routing_programs WHERE user_id=?', (user['id'],)):
+        scopes = {'main':''}
+        for row in self.c.rows('SELECT id,sources,playlist_scope FROM routing_programs WHERE user_id=?', (user['id'],)):
             definitions[row['id']] = json.loads(row['sources'])
+            scopes[row['id']] = row['playlist_scope']
         targets = {}
         for kind in self.c.output_kinds(user):
             sources = self.route(user, kind)
-            pid = program_id(sources)
+            scope = self.playlist_scope(user, kind)
+            pid = program_id(sources, scope)
+            scopes[pid] = scope
             # New, not-yet-assigned outputs share a silent empty program until configured.
             definitions[pid] = sources
             targets.setdefault(pid, []).append(kind)
@@ -181,7 +190,7 @@ class RoutingModel:
             active = pid == 'main' or pid in targets
             if not archived and not active:
                 continue
-            result.append({'id':pid,'sources':[row['key'] for row in catalog if row['key'] in members],
+            result.append({'id':pid,'playlist_scope':scopes.get(pid,''),'sources':[row['key'] for row in catalog if row['key'] in members],
                            'path':user['prefix']+('live' if pid=='main' else pid),
                            'rtc_path':user['prefix']+('webrtc-program' if pid=='main' else 'webrtc-'+pid),
                            'targets':targets.get(pid, []),'active':active})
@@ -194,7 +203,7 @@ class RoutingModel:
         return result
 
     def output_program(self, user, kind):
-        return self.program(user, program_id(self.route(user,kind)))
+        return self.program(user, program_id(self.route(user,kind), self.playlist_scope(user,kind)))
 
     def active_record_sources(self,user):
         return [row['key'] for row in self.sources(user)]+['live']+[row['id'] for row in self.programs(user) if row['id']!='main']

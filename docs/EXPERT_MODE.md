@@ -1,4 +1,4 @@
-# Expertenmodus und Medienerweiterungen · 1.1.6
+# Expertenmodus und Medienerweiterungen · 1.1.8
 
 Den eigenen Menüpunkt **Expertenmodus** öffnen, den Modus aktivieren und **Modus übernehmen** wählen. Die Untermenüs „Protokolle & WebRTC“, „Quellen & Routing“, „Ausgänge & Konten“, „Native Aufnahme“, „Playback“, „Zuschauerfreigabe“, „Neuverbindung“, „Automation & Export“ und „Discord-Bot“ bündeln die technischen Einstellungen. Die normalen Ansichten behalten ihre grundlegenden Funktionen. Er gilt für die aktuelle Anmeldung. Eine weitere Anmeldung startet mit ausgeschaltetem Expertenmodus, auch beim selben Benutzer. Das Backend prüft technische Anfragen zusätzlich zur Sichtbarkeit in der Oberfläche. Ein Administratorkonto umgeht diese Prüfung nicht.
 
@@ -112,3 +112,7 @@ Nur für die WebRTC-Programmvorschau wird das AAC-Audio zusätzlich nach Opus ge
 **Mein Konto** ist für jeden angemeldeten Benutzer direkt im Menü erreichbar, unabhängig vom Expertenmodus und der Administratorrolle. Das bisherige Passwort und ein neues Passwort mit mindestens zwölf Zeichen eingeben. Die aktuelle Sitzung bleibt angemeldet; andere bestehende Anmeldungen werden ungültig.
 
 Administratoren können unter **Administration** einen anderen Benutzer zunächst deaktivieren und anschließend **Benutzer löschen** wählen. Zum Bestätigen den Benutzernamen eingeben. Aktive Konten und das eigene Administratorkonto sind geschützt. Laufende Uploads/Verarbeitung bzw. Aufnahmeabschlüsse müssen beendet sein. Kontodaten und persönliche MediaMTX-Pfade/Zugänge werden entfernt; Mediendateien werden separat archiviert und nicht endgültig vernichtet. Archivdetails stehen in der Betriebsanleitung.
+
+## Playlists ab 1.1.7
+
+Die normale Ansicht **Playlists** verwaltet Medien, Ordner und Reihenfolge. **Expertenmodus → Playlist-Ausspielung** ergänzt Regeln je Quelle/Ausgang, Fallback-Verzögerung, Wochentage und Zeitzonen. Echte Live-Quellen haben Vorrang; unterbrochene Playlists behalten ihre Position. Details und Beispiele: [Playlists](PLAYLISTS.md).
