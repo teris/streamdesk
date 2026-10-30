@@ -1,14 +1,72 @@
 # Änderungen
 
+## 2.0.0-rc6
+
+- Feste Größen- und Laufzeitgrenzen für MP4-Importe entfernt: Web und FTPS erlauben Videos unabhängig von Dateigröße und Länge, auch in der einfachen Offline-Videobibliothek. Die bisherigen 500 MB, 120 Minuten beziehungsweise fünf Minuten gelten nicht mehr. Upload und eigentliche Umwandlung besitzen kein festes Gesamtzeitlimit.
+- Freier Datenträgerspeicher bestimmt den Import: Web-Uploads werden direkt im Datenverzeichnis zwischengespeichert und ohne zweite vollständige Dateikopie übernommen. Empfangene Daten, geschätzter Ausgabespeicher, andere Umwandlungen und 350 MiB Betriebsreserve werden berücksichtigt; laufende Umwandlungen überwachen freien Platz und entfernen bei Abbruch ihre Teilausgabe. Unfertige Web-Zwischendateien werden bei Anfrageende oder nach Serverneustart bereinigt.
+- Noch vorhandene abgeschlossene FTP-Dateien, die an der früheren 500-MB-Grenze scheiterten, werden bei aktivem Zugang nach dem Update automatisch erneut eingereiht. Fehlgeschlagene neue FTP-Umwandlungen behalten das Original privat für einen erneuten Versuch; nach Erfolg wird es entfernt. Gespeicherter Zielordner und Benutzerzuordnung bleiben erhalten. Kontolöschung archiviert auch zurückbehaltene FTP-Originale.
+- „Medien → FTP-Importe“ ergänzt Status, Dateigröße in GB, gemessenen Umwandlungsfortschritt, Vorschau fertiger Dateien, „Erneut importieren“ und bestätigtes Löschen einer zurückbehaltenen Quelldatei. Derselbe Status bleibt unter „Mein Konto“ verfügbar; Zugänge und interne Dateipfade bleiben geschützt.
+- VERSION, Installer-Hinweis, README-Screenshots und Betriebsdokumentation auf rc6 aktualisiert. Reverse-Proxy-Beispiel hebt die bisherige HTTP-Dateigrenze mit `client_max_body_size 0` auf; vorhandene externe Proxy-Hosts müssen manuell angepasst werden.
+- Prüfstand: 236 Unit-Tests bestanden. Zwei sparse MP4-Dateien mit jeweils 6 GiB wurden über FTP-Wiederholung beziehungsweise Web-Zwischenspeicher mit echtem FFmpeg 7.1.5 verarbeitet und als dekodierbare H.264-/AAC-Videos einer Playlist zugeordnet. Echte FTPS-, Mehrfachupload-, Desktop-/Mobil- und Studio-Prüfungen einschließlich geplanter lokaler RTMP-Ausgänge, Ton, Quellenwechsel, Fortsetzung, Aufnahme und WebRTC bestanden. Die 6-GiB-Prüfung testet große Dateigrößen mit kurzen gültigen Medieninhalten, keine vollständige 6-GiB-Netzwerkübertragung oder zweistündige Echtzeitwiedergabe.
+
+## 2.0.0-rc5
+
+- Wiederholten Wechsel zwischen Playlist und Standby an einem gespeicherten Schleifenende behoben. Der gemeldete Einstieg lag nur 69 Millisekunden vor dem rechnerischen Ende; die tatsächlichen umgewandelten Videos endeten durch Container-/AAC-Rundung etwas früher. FFmpeg konnte bei diesem Einstieg bei einem Frame ohne Mediendaten hängen bleiben, worauf MediaMTX die Verbindung nach zehn Sekunden schloss. Fortsetzpunkte innerhalb der letzten 250 Millisekunden beginnen jetzt den nächsten Playlist-Durchlauf. Andere Positionen werden unverändert fortgesetzt; vorhandene Videos, Playlists und Zeitpläne bleiben erhalten.
+- Die Startprüfung verlangt mehrere Videoframes und eine positive Ausgabezeit. Ein einzelner vorbereiteter Frame mit `out_time=N/A` gilt nicht mehr als laufende Playlist.
+- Gezielten echten Regressionstest mit fünf Dateien, den gemeldeten Videolängen und derselben Fortsetzposition ergänzt. Er prüft hörbaren Ton, steigende Datenzähler und eine unveränderte RTSP-Verbindung über die serverseitige Zeitüberschreitung hinaus. Unit-Tests sichern den Endbereich sowie normale Fortsetzpunkte ab.
+- Prüfstand: 227 Unit-Tests; gezielter Fortsetztest und vollständiger Studio-Test mit FFmpeg 6.1.1 sowie 7.1.5 und MediaMTX 1.21.3 bestanden. Beide lokalen RTMP-Verbindungen, Aufnahme, Dashboard-Ton und WebRTC bleiben bei den Quellenwechseln erhalten. Version und Dokumentation auf rc5 aktualisiert; die Bestätigung auf dem Benutzer-Server nach Installation steht aus.
+
+## 2.0.0-rc4
+
+- Wiederholte Playlist-Abbrüche im Planer behoben: Der gemeinsame Encoder wird bei einem langsameren Start nicht mehr nach fünf Sekunden beendet. Seine Vorbereitung läuft ohne blockierendes Warten weiter und bleibt über Controller-Durchläufe erhalten. Erst nach 45 Sekunden ohne erstes Signal wird aufgeräumt und mit Wiederholungsabstand neu versucht. Zurückkehrende Live-Quellen können die Vorbereitung unterbrechen; deaktivierte Benutzer und entfernte Programme hinterlassen keinen Startprozess.
+- Dashboard zeigt „Playlist wird vorbereitet“ während des Starts. Programme und geplante Ausgänge nutzen währenddessen das bestehende Umschaltbild. Interne RTSP-Ausgaben verwenden 1200 Byte Paketgröße. AAC-/Opus-Umwandlung beim Kopieren des Programmbilds erhält die gemeinsame Zeitbasis beider Spuren.
+- FTP-Uploads direkt in „Bibliothek“, bestehende Medien-Unterordner und neue Unterordner ermöglicht. Fertige Videos bleiben gegen Überschreiben geschützt; Pure-FTPd vergibt bei gleichnamigen Uploads einen neuen Namen. Der Abgleich erkennt seine eigenen Ansichtsdateien, erhält unbekannte und unvollständige Uploads und ordnet Uploads auch nach einem Web-Ordnerwechsel dem bisherigen Medienordner zu. Keine zusätzliche Kopie fertiger Videos und kein erneuter Import der Ansichtsdateien.
+- Medien- und Playlist-Verwaltung in eigene Menüpunkte getrennt. „Medien“ enthält Ordner, Uploads und Dateiverwaltung; „Playlists“ enthält die Playlist-Liste und den Editor mit Name, Ordner, Reihenfolge und Löschfunktion. Eine aufklappbare Videoauswahl mit Suche, Ordnerfilter und Kontrollkästchen ergänzt den Editor. Entwürfe bleiben beim Ansichtswechsel erhalten; die Massen-Auswahl umfasst alle Videos des aktuellen Medienordners.
+- Unit-, echte FTPS-, Medien- und Browsertests um langsame Encoderstarts, erhaltene Uploads, Ordnerzuordnung und getrennte Verwaltungsansichten erweitert. VERSION, Betriebsdokumentation und README mit aktuellen Screenshots auf rc4 aktualisiert. Eine Bestätigung auf dem Benutzer-Server nach dem Update steht aus.
+
+## 2.0.0-rc3
+
+- Deutlich beschriftete Schaltfläche „Ton einschalten / ausschalten“, Lautstärkeregler und Tonstatus direkt unter der Dashboard-Programmvorschau ergänzt. Normale Benutzer können den Ton ohne Expertenmodus bedienen; Browser-Stummschaltung und Regler bleiben synchron. Auch einzeln geöffnete HLS- und WebRTC-Player besitzen eine sichtbare Tonsteuerung.
+- Nach einem HLS-Neustart wird eine vom Browser verweigerte automatische Tonwiedergabe aufgefangen: Das Bild startet stumm weiter, der Ton lässt sich erneut per Klick freigeben.
+- Playlist-Übernahme ins Programm verarbeitet die Audiospur mit frischen Zeitstempeln als AAC/48 kHz/Stereo. Das gemeinsam erzeugte H.264-Bild wird weiterhin kopiert; es entsteht kein weiterer Videoencoder pro Ausgang. Der interne Transport bleibt RTSP, echte SRT-/RTMP-Live-Eingänge bleiben unverändert.
+- WebRTC-Audiobrücke normalisiert den Audiostart vor der Opus-Kodierung und verwendet ein größeres Analysefenster. Die Vorbereitung bestätigt erst ein tatsächlich veröffentlichtes H.264-/Opus-Signal. Unvollständige beziehungsweise fehlgeschlagene Starts räumen ihren Prozess auf, damit der nächste Versuch frisch beginnt.
+- Während der WebRTC-Vorbereitung schützt eine begrenzte Startfrist den Prozess vor der bisherigen automatischen Leerlaufbereinigung. Langsamere Playlist-/Verbindungsstarts werden dadurch nicht bereits nach 20 Sekunden ohne verbundenen Leser beendet.
+- Tests um Tonbedienung, echten dekodierten Dashboard-Ton, anspruchsvollere Playlist-Bilder und alte Pfade ohne Präfix erweitert. Der Startschutz und die Bereinigung unvollständiger Signale sind durch Unit-Tests abgesichert. Version und Dokumentation auf rc3 aktualisiert; die Bestätigung auf dem Benutzer-Server steht aus.
+
+## 2.0.0-rc2
+
+- FTP-Verwaltung in ein eigenes Administrations-Untermenü verschoben. Erfolgreiches Speichern beendet die Anzeige „Wird gespeichert …“ und zeigt eine dauerhafte Bestätigung.
+- Verbindungsdaten des ausgewählten Benutzers sind vor und nach dem Speichern sichtbar: Ingest-Domain/IP, Port, Protokoll, passiver Modus und FTP-Benutzername mit Kopierfunktionen. Vorhandene Zugänge laden ihren Freigabestatus; Passwortwechsel und Sperren erhalten die bestehenden Daten.
+- Die FTP-Serveradresse wird ausschließlich aus STREAMDESK_INGEST übernommen. Eine alte abweichende STREAMDESK_FTP_HOST-Einstellung wird ignoriert und vom Installer entfernt.
+- Persönlichen FTP-Zugang samt Passwortverwaltung und Verbindungsanleitung nach „Mein Konto“ verschoben.
+- Web-Uploads und bestehende Unterordner werden im persönlichen FTP-Ordner „Bibliothek“ zum Lesen und Herunterladen angezeigt, ohne eine zweite Videokopie anzulegen. Umbenennen, Verschieben und Löschen über die Webverwaltung werden automatisch abgeglichen; neue FTP-Uploads bleiben separat möglich. Schreibschutz und Ausschluss aus dem Import verhindern beschädigte oder doppelt importierte Bibliotheksdateien.
+- Alle vorhandenen Playlists sind unabhängig vom geöffneten Videoordner erreichbar und bearbeitbar/löschbar. Ungespeicherte Playlist-Entwürfe bleiben beim Ordnerwechsel erhalten.
+- Bibliotheksabfragen mit einmaliger Auswertung der Playlist-Verweise und passenden Datenbankindizes beschleunigt. Ordnernavigation verwendet bereits geladene Daten; Videolisten zeigen höchstens 50 Einträge je Seite und unveränderte Hintergrundabfragen bauen die Oberfläche nicht neu auf.
+- Direkter MediaMTX-Laufzeitabgleich und lokale Dienstberechtigungen berücksichtigen nun auch ausdrücklich aus der Datenbank zugeordnete ältere Pfade ohne den aktuellen Namensbereich, etwa „live“ und „playlist-source2“. Ein leerer Präfix wird dabei niemals als Freigabe für fremde Pfade verwendet; der Installer nutzt denselben Abgleich.
+- WebRTC zeigt einzelne Verbindungsphasen und konkrete Hinweise bei unerreichbarem Medienport oder fehlenden Videodaten; erfolglose Verbindungen werden nach begrenzter Wartezeit aufgeräumt.
+- Medienprüfung auf hörbaren Testton erweitert: Upload/Umwandlung, Playlist-Fortsetzung, zwei lokale RTMP-Ausgänge und tatsächlich dekodiertes WebRTC-Audio. Ein absichtlich unerreichbarer WebRTC-Host prüft die Fehleranzeige. Zusätzlicher Integrationslauf mit älteren Konten ohne Pfadpräfix bestanden. Die Bestätigung nach dem Update des Benutzer-Servers steht aus.
+- Prüfstand: 218 bestandene Unit-Tests, echte FTPS-Prüfung, Browserprüfung der Kontoverwaltung sowie große Bibliothek und echte Medienprüfung. README-Screenshots und Betriebsdokumentation aktualisiert.
+- Der Installer informiert vor Bestätigung und Änderungen ausdrücklich über Installation/Aktualisierung von Pure-FTPd und OpenSSL, zusätzliche FTPS-Dienste, Ingest-Adresse und benötigte Ports. Auch nicht interaktive Updates und reine Prüfungen zeigen den Hinweis; deaktivierte FTP-Einrichtung und übersprungene Paketinstallation werden berücksichtigt.
+
+## 2.0.0-rc1
+
+- Persönliche FTP-Zugänge durch Administratoren anlegen, freigeben und sperren; Benutzer verwalten ihr eigenes getrenntes FTP-Passwort. Pure-FTPd mit verpflichtendem explizitem TLS, abgeschlossenen Benutzerordnern und automatischer Video-Umwandlung einschließlich Unterordnern im nativen Installer ergänzt.
+- Mehrere Videos anhaken, ordnerübergreifende Auswahl sammeln und gemeinsam zu einer Playlist hinzufügen. Bearbeiten, Umbenennen, Reihenfolge, Entfernen und bestätigtes Löschen von Playlists deutlicher zugänglich gemacht; verwendete Playlists bleiben geschützt.
+- Gemeinsame Playlist über Source 2 für alle Ausgänge statt unterschiedlicher Playlists je Anbieter. Ein geteilter Playlist-Encoder erzeugt das Videosignal; andere Programme übernehmen es ohne erneute Video-Umwandlung. Live auf Source 1/2 pausiert die Playlist, danach wird die gespeicherte Position fortgesetzt. Feste Live-Eingänge und bestehende Programmkennungen bleiben erhalten.
+- Grafischer Playlist-Scheduler mit Wochen-/Tagesansicht und anklickbaren Zeitfenstern. Frühere Bereichsregeln werden beim Update in eine gemeinsame Source-2-Regel überführt; andere alte Regeln bleiben deaktiviert gespeichert.
+- Neuer persönlicher „Planer“ mit wiederkehrenden Streamzeiten, Ersatz-Playlist und ausdrücklicher Anbieterauswahl. Automatischer Start ohne Anmeldung oder Live-Signal, saubere Übernahme durch Live und Ende automatisch gestarteter Ausgänge am Zeitfensterende. Manuelle Starts und Stopps haben Vorrang.
+- Optionale Übertragung wiederkehrender Sendezeiten an Twitch mit zusätzlicher Zeitplan-Berechtigung. Nur von StreamDesk angelegte Twitch-Segmente werden verwaltet; bestehende Stream-/Chat-Berechtigungen bleiben gültig.
+- Persönlicher Umschalttext, standardmäßig „Synchronisation“, als Videobild und Vorschau-Verbindungstext. Kontoweite Playlist-Kennzeichnung, standardmäßig „Wiederholung“, mit vier wählbaren Bildecken direkt im gesendeten Video.
+- Expertenmodus wird pro Benutzer gespeichert und nach Passwort-, Passkey- sowie Recovery-Anmeldung wiederhergestellt. FTP, Planer und Playlists berücksichtigen die zentralen Dienstfreigaben.
+- VERSION, README, Installer, Screenshots und Betriebsdokumentation für 2.0.0-rc1 aktualisiert. 207 Unit-Tests sowie echte FTPS-, Medien- und Browserprüfungen bestanden. MediaMTX bleibt auf dem geprüften 1.21.x-Profil.
+
 ## 1.1.8
 
 - Mehrere MP4-Dateien gleichzeitig in Offline- und Playlist-Bibliothek auswählen; gemeinsame Warteschlange verarbeitet die Dateien nacheinander und bleibt beim Menüwechsel erhalten. Fehlerhafte Videos verhindern die folgenden Uploads nicht.
-- Bis zu 50 wartende Dateien aufnehmen, weitere Videos ergänzen, wartende Einträge entfernen und fehlgeschlagene Uploads erneut versuchen. Der beim Hinzufügen gewählte Zielordner bleibt pro Datei erhalten.
 - Pro Datei getrennte Fortschrittsanzeigen für Upload mit übertragener Datenmenge sowie tatsächliche FFmpeg-Umwandlung. Abschluss erst nach erfolgreichem Speichern; private Upload-Aufträge, Wiederaufnahme der Statusanzeige nach Seitenneuladen und Schutz vor doppelter Verarbeitung bei wiederholter Anfrage.
 - Videos in beiden Bibliotheken umbenennen; Dateizugänge, IDs, Playlist-Verweise und Wiedergabepositionen bleiben erhalten. Der sichtbare Name wird auch für Dateidownloads verwendet.
 - Löschbarkeit und konkrete Nutzungsgründe sichtbar. Löschen fragt aktuelle Verweise erneut ab und kann nach Bestätigung Referenzen aus inaktiven Playlists entfernen. Aktuelle Offline-Videos, laufende Playlist-Dateien und letzte Videos zugeordneter Playlists bleiben geschützt.
 - Umwandlungs-Zeitlimit, Fortschritts-/Fehlerstatus und Speicherreservierungen für aufeinanderfolgende Dateien abgesichert. Neue Dokumentation und Version 1.1.8.
-- README um einen Screenshot der laufenden Upload-/Umwandlungsanzeige ergänzt. 180 Unit-Tests sowie echte Browser- und Medientests für Mehrfachupload, Umbenennen, Löschen und bestehende Playlist-/Programmfunktionen bestanden; Einzelheiten in TESTING.md.
 
 ## 1.1.7
 

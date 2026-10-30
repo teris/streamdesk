@@ -12,7 +12,7 @@ import threading
 import time
 from unittest.mock import patch
 import yaml
-from media_smoke import port, until
+from media_smoke import port, until, audio_level
 from playwright.sync_api import sync_playwright
 from werkzeug.serving import make_server
 
@@ -37,7 +37,7 @@ def main():
             'authMethod':'internal','authInternalUsers':[],'paths':{'foreign':{'source':'publisher'}}}))
         clip=base/'offline.mp4'
         subprocess.run([str(args.ffmpeg),'-v','error','-f','lavfi','-i','color=c=green:s=640x360:r=30',
-            '-f','lavfi','-i','anullsrc=r=48000:cl=stereo','-t','2','-c:v','libx264','-preset','ultrafast',
+            '-f','lavfi','-i','sine=frequency=660:sample_rate=48000','-t','2','-c:v','libx264','-preset','ultrafast',
             '-pix_fmt','yuv420p','-g','30','-c:a','aac','-threads','1',str(clip)],check=True)
         os.environ.update(STREAMDESK_ENGINE='0',STREAMDESK_DATA=str(base/'data'),STREAMDESK_NATIVE_ROOT=str(base/'native'),
             STREAMDESK_DEFAULT_CLIP=str(clip),MEDIAMTX_CONFIG=str(config),MEDIAMTX_API=f'http://127.0.0.1:{api}/v3/',
@@ -91,7 +91,7 @@ def main():
             address='http://127.0.0.1:'+str(server.server_port);core.PUBLIC=address
             threading.Thread(target=server.serve_forever,daemon=True).start()
             with sync_playwright() as playwright:
-                browser=playwright.chromium.launch(headless=True,args=['--autoplay-policy=no-user-gesture-required'])
+                browser=playwright.chromium.launch(headless=True,args=['--no-sandbox','--mute-audio'])
                 context=browser.new_context()
                 context.add_cookies([{'name':'session','value':client.get_cookie('session').value,'url':address}])
                 page=context.new_page();errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
@@ -102,6 +102,7 @@ def main():
                 frame=page.frame_locator('#source3 iframe')
                 frame.locator('video').wait_for()
                 def wait_color(video, channel):
+                    video.page.bring_to_front()
                     def matches():
                         pixel=video.evaluate('''video => {
                             if (video.readyState < 2) return [0,0,0];
@@ -113,6 +114,22 @@ def main():
                     until(matches,timeout=30)
 
                 until(lambda:frame.locator('video').evaluate('video => video.readyState >= 2 && video.currentTime > .2'),timeout=30)
+                page.evaluate("async()=>{await fetch('/api/expert-mode',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':document.querySelector('meta[name=csrf-token]').content},body:JSON.stringify({enabled:false})});}")
+                page.wait_for_function("() => document.documentElement.dataset.expert==='false'")
+                page.wait_for_function("() => !document.querySelector('#program-audio-toggle').disabled")
+                assert page.locator('#program-audio-toggle').inner_text()=='Ton einschalten'
+                assert frame.locator('video').evaluate('video=>video.muted')
+                page.locator('#program-audio-toggle').click()
+                until(lambda:frame.locator('video').evaluate('video=>!video.muted&&video.volume>0'))
+                until(lambda:audio_level(frame.locator('video'))>.005)
+                page.locator('#program-volume').press('Home');until(lambda:frame.locator('video').evaluate('video=>video.volume===0&&video.muted'))
+                page.locator('#program-volume').press('End');until(lambda:frame.locator('video').evaluate('video=>video.volume===1&&!video.muted'))
+                assert page.locator('#program-volume-value').inner_text()=='100 %'
+                page.locator('#program-audio-toggle').click();until(lambda:frame.locator('video').evaluate('video=>video.muted'))
+                page.locator('#program-audio-toggle').click();until(lambda:audio_level(frame.locator('video'))>.005)
+                assert frame.locator('#player-audio').is_hidden()
+                print('PASS: visible dashboard audio button and keyboard volume slider control real HLS audio without expert mode.',flush=True)
+                page.evaluate("async()=>{await fetch('/api/expert-mode',{method:'POST',headers:{'Content-Type':'application/json','X-CSRF-Token':document.querySelector('meta[name=csrf-token]').content},body:JSON.stringify({enabled:true})});}")
                 rtc_page=context.new_page();rtc_page.on('pageerror',lambda error:errors.append(str(error)))
                 rtc_page.goto(address+'/webrtc/3/play/');rtc_page.click('#rtc-start')
                 rtc_page.wait_for_function("() => document.querySelector('#rtc-video').readyState >= 2 && document.querySelector('#rtc-video').currentTime > .2",timeout=30000)
@@ -130,6 +147,7 @@ def main():
                 until(lambda:core.ENGINE.snapshot[uid].get('selected')==2)
                 recording_alive();time.sleep(3)
                 wait_color(frame.locator('video'),2)
+                until(lambda:audio_level(frame.locator('video'))>.005)
                 wait_color(rtc_page.locator('#rtc-video'),2)
                 # Starting and stopping external forwarding must never recreate the program.
                 with core.LOCK:
@@ -144,10 +162,19 @@ def main():
                 until(lambda:core.ENGINE.snapshot[uid].get('offline_playing'))
                 recording_alive();time.sleep(4)
                 wait_color(frame.locator('video'),1)
+                until(lambda:audio_level(frame.locator('video'))>.005)
                 wait_color(rtc_page.locator('#rtc-video'),1)
                 for video in (frame.locator('video'),rtc_page.locator('#rtc-video')):
-                    before=video.evaluate('video => video.currentTime')
-                    until(lambda:video.evaluate('video => video.currentTime')>before+1,timeout=20)
+                    video.page.bring_to_front()
+                    # HLS may recreate its MediaSource after a source switch,
+                    # resetting currentTime. Verify fresh presented frames.
+                    frames=video.evaluate("""video=>new Promise((resolve,reject)=>{
+                        let count=0,handle;
+                        const timer=setTimeout(()=>{video.cancelVideoFrameCallback(handle);reject(new Error('Preview did not present new frames'));},15000);
+                        const next=()=>{if(++count>=15){clearTimeout(timer);resolve(count);}else handle=video.requestVideoFrameCallback(next);};
+                        handle=video.requestVideoFrameCallback(next);
+                    })""")
+                    assert frames>=15,frames
                 recording_alive();recorded_for=time.monotonic()-started
                 post('/api/recordings/stop',{})
                 until(lambda:core.rows('SELECT status FROM recordings WHERE id=?',(rid,))[0]['status']=='ready')

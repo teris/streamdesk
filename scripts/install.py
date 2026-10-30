@@ -28,13 +28,14 @@ import urllib.request
 SOURCE = Path(__file__).resolve().parents[1]
 ENV_DIR = Path('/etc')
 SYSTEMD_UNIT_DIR = Path('/etc/systemd/system')
+FTP_LOG_ROOT = Path('/var/log')
 VERSION = (SOURCE / 'VERSION').read_text().strip()
 MEDIA_VERSION = '1.21.3'
 MEDIA_DIGESTS = {
     'amd64': '0a2ea7eba96023631efa1bea7804823a9145b043b6646a8a05798d4ac24ed635',
     'arm64': '27f038237cb5f77a724f6afc58eca2798f2bc4edf9989895631a80eeb41a4fe2',
 }
-FILES = ['upload_features.py', 'playlist_features.py', 'service_policy.py', 'outbound_http.py', 'app.py', 'account_features.py', 'auth_strategy.py', 'automation_features.py', 'build_d_features.py', 'integrations.py', 'media_config.py', 'mediamtx_client.py', 'media_features.py', 'notification_features.py', 'program_preview.py', 'routing_model.py', 'routing_features.py', 'playback_features.py', 'ROADMAP.md', 'browser_overlay.py', 'bootstrap.py',
+FILES = ['ftp_auth.py','ftp_features.py','studio_features.py','upload_features.py', 'playlist_features.py', 'service_policy.py', 'outbound_http.py', 'app.py', 'account_features.py', 'auth_strategy.py', 'automation_features.py', 'build_d_features.py', 'integrations.py', 'media_config.py', 'mediamtx_client.py', 'media_features.py', 'notification_features.py', 'program_preview.py', 'routing_model.py', 'routing_features.py', 'playback_features.py', 'ROADMAP.md', 'browser_overlay.py', 'bootstrap.py',
          'gunicorn.conf.py', 'requirements.txt', 'stream_list.proto', 'stream_list_pb2.py',
          'stream_list_pb2_grpc.py', 'README.md', 'INSTALL.md', 'LICENSE', 'NOTICE', 'LICENSE.youtube-sample.txt', 'VERSION', 'install.sh', 'uninstall.sh', '.env.example', 'CHANGELOG.md', 'FEATURE.md', 'THIRD_PARTY.md', 'SECURITY.md', 'CONTRIBUTING.md', 'TESTING.md']
 
@@ -135,6 +136,13 @@ def parse(argv=None):
     for name, port in [('rtsp', 8554), ('rtmp', 1935), ('srt', 8890), ('moq', 8892),
                        ('api', 9997), ('metrics', 9998), ('hls', 8888)]:
         p.add_argument('--' + name + '-port', type=int, default=port, help='Port bei einer Neuinstallation bzw. einem neu aktivierten Listener')
+    p.add_argument('--ftp-port', type=int, default=2121, help='Eigener FTPS-Port, Standard 2121; bestehende FTP-Dienste bleiben unverändert')
+    p.add_argument('--ftp-passive-range', default='30000:30049', help='Passive FTPS-Datenports')
+    p.add_argument('--ftp-public-ip', help='Feste öffentliche IPv4-Adresse für passives FTPS hinter NAT')
+    p.add_argument('--ftp-certificate', help='Vorhandene PEM-Datei mit Zertifikat und privatem Schlüssel für FTPS')
+    ftp_choice=p.add_mutually_exclusive_group()
+    ftp_choice.add_argument('--disable-ftp',action='store_true',help='Pure-FTPd für diese Installation nicht aktivieren')
+    ftp_choice.add_argument('--enable-ftp',action='store_true',help='Einen zuvor deaktivierten FTPS-Dienst wieder einrichten und starten')
     p.add_argument('--admin-user', default='admin')
     p.add_argument('--admin-password-file', help='Root-private Datei mit dem initialen Passwort; sonst zufällig erzeugt')
     p.add_argument('--backup-dir', default='/var/backups/streamdesk')
@@ -196,6 +204,10 @@ def validate(a):
     saved = load_env(a.env_file)
     old = saved if a.mode == 'update' or a.recover else {}
     if old:
+        if '--ftp-port' not in a.explicit_options:a.ftp_port=int(old.get('STREAMDESK_FTP_PORT',a.ftp_port))
+        if '--ftp-passive-range' not in a.explicit_options:a.ftp_passive_range=old.get('STREAMDESK_FTP_PASSIVE',a.ftp_passive_range)
+        a.ftp_public_ip=a.ftp_public_ip or old.get('STREAMDESK_FTP_PUBLIC_IP') or None
+        if not a.enable_ftp and '--disable-ftp' not in a.explicit_options and old.get('STREAMDESK_FTP_ENABLED')=='0':a.disable_ftp=True
         previous_data = safe_directory(old.get('STREAMDESK_DATA', str(a.data_dir)))
         if '--data-dir' in a.explicit_options and previous_data != a.data_dir:
             raise ValueError('Der angegebene --data-dir weicht von der bestehenden Installation ab: ' + str(previous_data))
@@ -230,6 +242,14 @@ def validate(a):
         raise ValueError('Ungültiger gespeicherter MediaMTX-Dienstname.')
     if a.data_dir == a.app_dir or a.data_dir == a.mediamtx_dir:
         raise ValueError('Anwendungsdaten benötigen einen eigenen Ordner.')
+    if not 1<=a.ftp_port<=65535:raise ValueError('Ungültiger FTPS-Port.')
+    passive=re.fullmatch(r'(\d+):(\d+)',a.ftp_passive_range)
+    if not passive or not 1024<=int(passive[1])<=int(passive[2])<=65535 or int(passive[2])-int(passive[1])>500:raise ValueError('Ungültiger passiver FTPS-Portbereich.')
+    if int(passive[1])<=a.ftp_port<=int(passive[2]):raise ValueError('FTPS-Steuerport liegt im passiven Portbereich.')
+    if a.ftp_public_ip and ipaddress.ip_address(a.ftp_public_ip).version!=4:raise ValueError('FTPS-NAT-Adresse muss eine IPv4-Adresse sein.')
+    if a.ftp_certificate:
+        a.ftp_certificate=Path(a.ftp_certificate).resolve()
+        if not a.ftp_certificate.is_file():raise ValueError('FTPS-Zertifikat fehlt.')
     check_installation_state(a, saved)
     if not a.public_url and not a.yes and sys.stdin.isatty():
         a.public_url = input('Öffentliche UI-Adresse (https://stream.example.com): ').strip()
@@ -506,10 +526,13 @@ def backup(a):
         write_private(folder / 'requirements-before.txt', frozen)
     if a.app_dir.exists():
         shutil.copytree(a.app_dir, folder / 'application', ignore=shutil.ignore_patterns('venv', '__pycache__', '.git', 'browsers'))
-    for name in (a.service_name, a.mediamtx_service):
+    for name in (a.service_name, a.mediamtx_service,a.service_name+'-ftp',a.service_name+'-ftp-auth'):
         unit = SYSTEMD_UNIT_DIR / (name + '.service')
         if unit.is_file():
             shutil.copy2(unit, folder / (name + '.service'))
+    for extension in ('.env','.pem'):
+        path=ENV_DIR/(a.service_name+'-ftp'+extension)
+        if path.is_file():shutil.copy2(path,folder/path.name)
     return folder
 
 
@@ -540,9 +563,14 @@ def restore_recovery_data(a, previous):
 
 def dependencies(a):
     if not a.skip_system_packages:
+        new_ftp=not a.disable_ftp and shutil.which('pure-ftpd') is None
         run(['apt-get', 'update'])
-        run(['apt-get', 'install', '-y', '--no-install-recommends', 'python3-venv', 'python3-pip', 'python3-yaml', 'ffmpeg', 'fonts-dejavu-core', 'chromium', 'procps', 'ca-certificates', 'acl'])
-    for command in ('ffmpeg', 'ffprobe', 'systemctl', 'useradd', 'setfacl', 'getfacl'):
+        packages=['python3-venv','python3-pip','python3-yaml','ffmpeg','fonts-dejavu-core','chromium','procps','ca-certificates','acl','openssl']
+        if not a.disable_ftp:packages.append('pure-ftpd')
+        run(['apt-get','install','-y','--no-remove','--no-install-recommends']+packages)
+        if new_ftp:
+            subprocess.run(['systemctl','disable','--now','pure-ftpd.service'],check=False,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    for command in ('ffmpeg', 'ffprobe', 'systemctl', 'useradd', 'setfacl', 'getfacl')+(() if a.disable_ftp else ('pure-ftpd','pure-authd','openssl')):
         if not shutil.which(command):
             raise RuntimeError('Fehlende Systemabhängigkeit: ' + command)
     if not Path('/usr/bin/chromium').is_file():
@@ -652,6 +680,93 @@ WantedBy=multi-user.target
 '''
 
 
+def ftp_units(a,identity):
+    name=a.service_name+'-ftp';runtime='/run/'+name
+    auth=f"""[Unit]
+Description=StreamDesk private FTP authentication
+After={a.service_name}.service
+[Service]
+EnvironmentFile={ENV_DIR}/{name}.env
+RuntimeDirectory={name}
+RuntimeDirectoryMode=0700
+ExecStart=/usr/sbin/pure-authd -u {identity.pw_uid} -g {identity.pw_gid} -p {runtime}/auth.pid -s {runtime}/auth.sock -r {a.app_dir}/scripts/ftp-auth
+Restart=on-failure
+UMask=0077
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths={a.data_dir}
+[Install]
+WantedBy=multi-user.target
+"""
+    force=' -P '+a.ftp_public_ip if a.ftp_public_ip else ''
+    ftp_log=FTP_LOG_ROOT/name/'transfers.log'
+    server=f"""[Unit]
+Description=StreamDesk isolated FTPS video uploads
+Requires={name}-auth.service
+After=network-online.target {name}-auth.service
+[Service]
+ExecStart=/usr/sbin/pure-ftpd -A -E -H -R -r -0 -k 95 -Y 3 -U 077:077 -c 20 -C 4 -u 1 -p {a.ftp_passive_range} -S 0.0.0.0,{a.ftp_port} -l extauth:{runtime}/auth.sock -2 {ENV_DIR}/{name}.pem -O stats:{ftp_log}{force}
+Restart=on-failure
+RestartSec=3
+UMask=0077
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths={a.data_dir}/ftp {ftp_log.parent} /run
+PrivateTmp=true
+PrivateDevices=true
+[Install]
+WantedBy=multi-user.target
+"""
+    return {name+'-auth':auth,name:server}
+
+
+def configure_ftp(a,identity):
+    name=a.service_name+'-ftp'
+    if a.disable_ftp:
+        for service in (name,name+'-auth'):
+            if (SYSTEMD_UNIT_DIR/(service+'.service')).exists():run(['systemctl','disable','--now',service])
+        return
+    root=a.data_dir/'ftp';root.mkdir(exist_ok=True,mode=0o700);os.chown(root,identity.pw_uid,identity.pw_gid)
+    log=FTP_LOG_ROOT/name/'transfers.log'
+    if log.parent.is_symlink():raise ValueError('FTPS-Protokollordner darf kein Symlink sein.')
+    log.parent.mkdir(parents=True,exist_ok=True,mode=0o750);os.chown(log.parent,0,identity.pw_gid)
+    if log.is_symlink():raise ValueError('FTPS-Transferprotokoll darf kein Symlink sein.')
+    log.touch(mode=0o640,exist_ok=True);os.chown(log,0,identity.pw_gid);log.chmod(0o640)
+    certificate=ENV_DIR/(name+'.pem')
+    if certificate.is_symlink():raise ValueError('Das verwaltete FTPS-Zertifikat darf kein Symlink sein.')
+    if a.ftp_certificate:write_private(certificate,a.ftp_certificate.read_text())
+    elif not certificate.exists():
+        with tempfile.TemporaryDirectory(prefix='streamdesk-ftps-') as directory:
+            key=Path(directory)/'key.pem';crt=Path(directory)/'cert.pem'
+            run(['openssl','req','-x509','-newkey','rsa:3072','-nodes','-days','3650','-subj','/CN='+a.ingest_host,'-keyout',key,'-out',crt],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            write_private(certificate,crt.read_text()+key.read_text())
+    certificate.chmod(0o600);os.chown(certificate,0,0)
+    wrapper=a.app_dir/'scripts'/'ftp-auth'
+    write_private(wrapper,'#!/bin/sh\nexec '+str(a.app_dir/'venv/bin/python')+' '+str(a.app_dir/'ftp_auth.py')+'\n',0o755)
+    write_private(ENV_DIR/(name+'.env'),'STREAMDESK_DATA='+json.dumps(str(a.data_dir))+'\nSTREAMDESK_FTP_UID='+str(identity.pw_uid)+'\nSTREAMDESK_FTP_GID='+str(identity.pw_gid)+'\n')
+    for service,content in ftp_units(a,identity).items():write_private(SYSTEMD_UNIT_DIR/(service+'.service'),content,0o644)
+    run(['systemctl','daemon-reload'])
+    run(['systemctl','enable',name+'-auth',name])
+    run(['systemctl','restart',name+'-auth'])
+    run(['systemctl','restart',name])
+    wait_ftp(a)
+    print('FTPS: Port '+str(a.ftp_port)+'; passive Datenports '+a.ftp_passive_range+'. Zugang je Benutzer in der Administration anlegen.')
+
+
+def wait_ftp(a):
+    for _ in range(20):
+        try:
+            with socket.create_connection(('127.0.0.1',a.ftp_port),timeout=1) as connection:
+                connection.settimeout(1)
+                if connection.recv(1024).startswith(b'220'):
+                    run(['systemctl','is-active','--quiet',a.service_name+'-ftp-auth',a.service_name+'-ftp'])
+                    return
+        except (OSError,subprocess.SubprocessError):pass
+        time.sleep(.25)
+    raise RuntimeError('FTPS-Dienst antwortet nicht. Portbelegung und die eigenen FTP-Dienstprotokolle prüfen; das Update wird zurückgenommen.')
+
+
 def wait_url(url, seconds=30, cafile=None):
     context = ssl.create_default_context(cafile=str(cafile)) if url.startswith('https://') else None
     for _ in range(seconds * 2):
@@ -682,6 +797,7 @@ def verify_media_profile(api, cafile=None):
 def install(a, old):
     global yaml
     before_active = subprocess.run(['systemctl', 'is-active', '--quiet', a.service_name], check=False).returncode == 0
+    ftp_before={name:subprocess.run(['systemctl','is-active','--quiet',name],check=False).returncode==0 for name in (a.service_name+'-ftp',a.service_name+'-ftp-auth')}
     media_was_active = True if a.remote_mediamtx else subprocess.run(
         ['systemctl', 'is-active', '--quiet', a.mediamtx_service], check=False).returncode == 0
     try:
@@ -703,6 +819,7 @@ def install(a, old):
     media_created = False
     recovery_started = False
     previous_data = None
+    ftp_touched=False
     try:
         dependencies(a)
         ui_identity, _, _ = ensure_service_accounts(a)
@@ -779,10 +896,13 @@ def install(a, old):
             media_owner = media_config_permissions(a)[1]
             write_private(a.mediamtx_config.parent / '.streamdesk-ingest.crt', a.ingest_cert.read_text(), 0o640, media_owner)
             write_private(a.mediamtx_config.parent / '.streamdesk-ingest.key', a.ingest_key.read_text(), 0o640, media_owner)
+        values.pop('STREAMDESK_FTP_HOST',None)
         values.update(STREAMDESK_PUBLIC=a.public_url, STREAMDESK_INGEST=a.ingest_host, STREAMDESK_DATA=str(a.data_dir),
                       STREAMDESK_APP_DIR=str(a.app_dir),
                       STREAMDESK_DEFAULT_CLIP=str(clip), STREAMDESK_NAMESPACE=a.namespace, STREAMDESK_BIND=a.bind,
                       STREAMDESK_NATIVE_ROOT=str(a.native_root),
+                      STREAMDESK_FTP_ENABLED='0' if a.disable_ftp else '1',STREAMDESK_FTP_PORT=str(a.ftp_port),
+                      STREAMDESK_FTP_LOG='/var/log/'+a.service_name+'-ftp/transfers.log',STREAMDESK_FTP_PASSIVE=a.ftp_passive_range,STREAMDESK_FTP_PUBLIC_IP=a.ftp_public_ip or '',
                       STREAMDESK_BROWSER_ROOT=str(a.browser_root), STREAMDESK_BROWSER_USER='streamdesk-browser',
                       STREAMDESK_LOCAL_IPS=','.join(local_ips), STREAMDESK_MEDIAMTX_SERVICE=a.mediamtx_service,
                       STREAMDESK_MEDIAMTX_MODE='remote-api' if a.remote_mediamtx else ('local-managed' if a.mode == 'standalone' else old.get('STREAMDESK_MEDIAMTX_MODE','local-attach')),
@@ -824,8 +944,7 @@ def install(a, old):
         wait_url(api.rstrip('/') + '/v3/config/global/get', cafile=values.get('MEDIAMTX_API_CA') or None)
         a.detected_media_version = verify_media_profile(api, values.get('MEDIAMTX_API_CA') or None)
         run([a.app_dir / 'venv/bin/python', '-c',
-             'import app,json,sys,yaml; from media_config import synchronize_runtime; '
-             'synchronize_runtime(app.mtx,yaml.safe_load(app.CONFIG.read_text()),app.NAMESPACE,obsolete_paths=json.load(sys.stdin))'],
+             'import app,json,sys; app.sync_media_runtime(obsolete_paths=json.load(sys.stdin))'],
             cwd=a.app_dir, env=environment, input=json.dumps(getattr(a, 'recovery_paths', [])), text=True)
         with sqlite3.connect(a.data_dir / 'app.db') as database:
             owner = database.execute('SELECT prefix FROM users ORDER BY id LIMIT 1').fetchone()
@@ -836,6 +955,8 @@ def install(a, old):
         run(['systemctl', 'enable', '--now', a.service_name])
         bind_url = endpoint(a.bind, 8080, 'http')
         wait_url(bind_url + 'login')
+        ftp_touched=True
+        configure_ftp(a,ui_identity)
         marker = {'version': VERSION, 'mode': a.mode, 'recovered': a.recover, 'namespace': a.namespace,
                   'backup': str(folder), 'media_config': str(a.mediamtx_config),
                   'mediamtx_major': a.mediamtx_major,
@@ -854,6 +975,16 @@ def install(a, old):
         print('Installation fehlgeschlagen. Vorhandene Konfiguration wird wiederhergestellt.', file=sys.stderr)
         if ui_touched:
             subprocess.run(['systemctl', 'stop', a.service_name], check=False)
+        if ftp_touched:
+            for name in (a.service_name+'-ftp',a.service_name+'-ftp-auth'):
+                subprocess.run(['systemctl','stop',name],check=False,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+                path=SYSTEMD_UNIT_DIR/(name+'.service');saved=folder/path.name
+                if saved.exists():shutil.copy2(saved,path)
+                else:path.unlink(missing_ok=True)
+            for extension in ('.env','.pem'):
+                path=ENV_DIR/(a.service_name+'-ftp'+extension);saved=folder/path.name
+                if saved.exists():shutil.copy2(saved,path)
+                else:path.unlink(missing_ok=True)
         if config_changed and (folder / 'mediamtx.yml').exists():
             shutil.copy2(folder / 'mediamtx.yml', a.mediamtx_config)
             meta = json.loads((folder / 'file-metadata.json').read_text())
@@ -904,8 +1035,22 @@ def install(a, old):
         subprocess.run(['systemctl', 'daemon-reload'], check=False)
         if before_active:
             subprocess.run(['systemctl', 'start', a.service_name], check=False)
+        if ftp_touched:
+            for name in (a.service_name+'-ftp-auth',a.service_name+'-ftp'):
+                if (folder/(name+'.service')).exists() and ftp_before.get(name):subprocess.run(['systemctl','start',name],check=False)
         print('Sicherung: ' + str(folder) + '. Neue Teildateien werden nicht automatisch gelöscht.', file=sys.stderr)
         raise
+
+
+def ftp_install_notice(a):
+    if a.disable_ftp:
+        return 'FTP: deaktiviert. Pure-FTPd wird nicht neu installiert. Eigene bereits eingerichtete FTP-Dienste werden gestoppt; Konten und Dateien bleiben erhalten.'
+    action='Der vorhandene Pure-FTPd wird eingerichtet; die Paketinstallation wurde ausdrücklich übersprungen.' if a.skip_system_packages else 'Pure-FTPd (FTP-Server) und OpenSSL werden installiert bzw. aktualisiert und für StreamDesk eingerichtet.'
+    return ('HINWEIS VOR DEM UPDATE / DER INSTALLATION: '+action+'\n'
+            'Es werden eigene Dienste für verschlüsselte FTP-Uploads gestartet. Andere FTP-Server werden nicht automatisch entfernt.\n'
+            'FTPS-Server (Ingest): '+a.ingest_host+' · Port '+str(a.ftp_port)+' · passive TCP-Ports '+a.ftp_passive_range+'\n'
+            'Videoimporte haben keine feste Größen- oder Laufzeitgrenze; Original und Umwandlung benötigen freien Speicher.\n'
+            'Diese Ports müssen direkt erreichbar sein. Mit --disable-ftp kann die FTP-Einrichtung ausgelassen werden.')
 
 
 def main(argv=None):
@@ -915,6 +1060,7 @@ def main(argv=None):
     old = validate(a)
     print('Modus: ' + a.mode + '\nUI: ' + a.public_url + '\nMediaMTX: ' + str(a.mediamtx_config)
           + '\nMediaMTX-Zielprofil: ' + str(a.mediamtx_major) + '\nPrivater Medien-Namensbereich: ' + a.namespace + '/')
+    print(ftp_install_notice(a),flush=True)
     if a.recover:
         print('Wiederaufsetzen: neue Datenbank und neue Zugangsdaten; bisherige Datenreste und Konfiguration werden gesichert.')
     if a.dry_run:
@@ -935,7 +1081,8 @@ def main(argv=None):
     if os_release.get('ID', '').strip('"') != 'debian' or os_release.get('VERSION_ID', '').strip('"').split('.')[0] not in ('12', '13'):
         raise RuntimeError('Dieser Installer unterstützt Debian 12 und 13. Andere Systeme benötigen eine manuelle Installation.')
     if not a.yes and sys.stdin.isatty():
-        if input('Konfiguration sichern und Installation ausführen? [ja/NEIN] ').strip().lower() != 'ja':
+        question='Konfiguration sichern und Installation ausführen? [ja/NEIN] ' if a.disable_ftp else 'Konfiguration sichern, Pure-FTPd einrichten und Installation/Update ausführen? [ja/NEIN] '
+        if input(question).strip().lower() != 'ja':
             print('Abgebrochen.')
             return
     install(a, old)

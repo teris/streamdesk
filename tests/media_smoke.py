@@ -39,6 +39,24 @@ def until(callback, timeout=20):
     raise AssertionError('Timed out waiting for local media state') from last_error
 
 
+
+def audio_level(video):
+    """Measure decoded browser audio without playing the test tone to speakers."""
+    return video.evaluate("""async video => {
+        if(!video.__meter){
+            const stream=video.captureStream();
+            if(!stream.getAudioTracks().length)throw new Error('No decoded audio track in preview');
+            const context=new AudioContext(),source=context.createMediaStreamSource(stream),analyser=context.createAnalyser(),silent=context.createGain();
+            silent.gain.value=0;source.connect(analyser);analyser.connect(silent);silent.connect(context.destination);
+            video.__meter={context,analyser};
+        }
+        const {context,analyser}=video.__meter;await context.resume();
+        await new Promise(resolve=>setTimeout(resolve,150));
+        const samples=new Float32Array(analyser.fftSize);analyser.getFloatTimeDomainData(samples);
+        return Math.sqrt(samples.reduce((sum,value)=>sum+value*value,0)/samples.length);
+    }""")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--mediamtx', required=True)

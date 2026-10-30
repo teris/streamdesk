@@ -2,3 +2,5 @@
 .rtc-panel video { width:100%; max-height:65vh; background:#000; border:1px solid var(--line); border-radius:12px; }
 .rtc-controls { display:flex; gap:12px; flex-wrap:wrap; margin:16px 0; }
 .rtc-controls button { min-height:44px; }
+
+.rtc-controls label{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.rtc-controls input[type=range]{width:150px;min-height:32px;padding:0;accent-color:var(--purple)}

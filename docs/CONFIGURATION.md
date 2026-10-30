@@ -65,3 +65,22 @@ Vorschau, manuelle Programmaufnahme, aktivierte native Programmaufnahme und Stre
 ## Konten ab rc.6
 
 Die Tabelle `user_id_sequence` reserviert Benutzer-IDs dauerhaft; nach einer Kontolöschung wird keine alte ID für ein neues Konto wiederverwendet. Dies schützt alte Sitzungscookies vor Zuordnung zu einem neuen Benutzer. Ein Passwortwechsel erhöht weiterhin die Sitzungsversion und aktualisiert nur die aktuelle Anmeldung.
+
+
+### Vorschauton und Playlist-Audio ab 2.0.0-rc3
+
+Unter der Dashboard-Programmvorschau stehen **Ton einschalten / ausschalten** und **Lautstärke** direkt zur Verfügung. Diese persönliche Wiedergabesteuerung benötigt keinen Expertenmodus und verändert den Ton der Streaming-Ausgänge nicht. Neue Vorschauen beginnen stumm, damit Browser sie automatisch starten können. Nach einer vom Browser blockierten Tonwiedergabe kann der Benutzer ihn erneut per Klick freigeben. Separat geöffnete HLS- und WebRTC-Player bieten dieselben Tonfunktionen.
+
+Die gemeinsame Source-2-Playlist verwendet den privaten RTSP-Hilfspfad `playlist-source2`. Beim Weiterreichen an ein Programm bleibt H.264 unverändert; dessen Audiospur wird als AAC/48 kHz/Stereo mit zur Videospur passender Zeitbasis ausgegeben. Die WebRTC-Brücke wandelt sie entsprechend nach Opus. Die Vorbereitung benötigt beide veröffentlichten Spuren und setzt fehlgeschlagene Prozesse zurück. Eine maximal 45 Sekunden gültige Startfrist verhindert, dass die normale Leerlaufbereinigung den Prozess während der Verbindungsvorbereitung beendet; anschließend gilt wieder die normale Leerlauflogik. Quellenprioritäten, öffentliche Listener und Zugangsdaten werden durch diese Korrektur nicht verändert.
+
+Ab rc4 startet auch der gemeinsame Playlist-Encoder ohne blockierendes Warten. Solange er vorbereitet wird, bleibt derselbe Prozess bestehen; nach spätestens 45 Sekunden ohne erstes Signal wird er aufgeräumt. Eine zurückkehrende Live-Quelle hat weiterhin Vorrang. Interne RTSP-Publisher verwenden 1200 Byte Paketgröße, damit MediaMTX die Pakete nicht nachträglich verkleinern muss.
+
+Ab rc5 verlangt die Startprüfung mehrere Videoframes und eine positive Ausgabezeit. Eine Pfadanmeldung oder ein einzelner Frame ohne Ausgabezeit reicht nicht. Fortsetzpositionen in den letzten 250 Millisekunden der gemeinsamen Schleife beginnen beim nächsten Durchlauf, damit Container-/Audio-Rundung keinen Einstieg hinter dem letzten abspielbaren Frame verursacht. Ein manuelles Zurücksetzen der Datenbank ist dafür nicht erforderlich.
+
+## Speicher für Videoimporte ab 2.0.0-rc6
+
+MP4-Dateien für Playlists und Offline-Videos haben über Web und FTPS keine feste Größen- oder Laufzeitgrenze. Upload und Umwandlung haben kein festes Gesamtzeitlimit. Web-Uploads liegen während des Empfangs direkt unter `STREAMDESK_DATA/uploads` und werden ohne zweite vollständige Dateikopie übernommen. Vor dem Empfang wird die angekündigte Datenmenge, während des Empfangs der tatsächlich noch freie Platz geprüft. Bei nicht ausreichendem Speicher antwortet die Weboberfläche mit einer Speichermeldung (HTTP 507). Unfertige Web-Zwischendateien werden bei Anfrageende beziehungsweise beim Serverneustart entfernt.
+
+Vor der Umwandlung wird zusätzlicher Ausgabespeicher mit ungefähr 650.000 Byte pro Videosekunde reserviert, zuzüglich **350 MiB Betriebsreserve**. Das Original belegt währenddessen ebenfalls Platz. Ein zweistündiges Video benötigt so ungefähr 4,7 GB zusätzlichen freien Platz neben seiner bereits gespeicherten Originaldatei. Reservierungen anderer laufender Umwandlungen werden berücksichtigt; höchstens zwei Benutzer können gleichzeitig verarbeiten. Während FFmpeg läuft, wird freier Platz überwacht; bei Unterschreiten der Reserve wird die Verarbeitung abgebrochen und die Teilausgabe entfernt. Das sind Speicherprüfungen, keine Obergrenzen je Video.
+
+Fehlgeschlagene FTP-Originale bleiben für einen erneuten Import erhalten und können unter **Medien → FTP-Importe** ausdrücklich gelöscht werden. Fertige Bibliotheksdateien werden im FTP-Bereich über Hardlinks angezeigt und belegen dadurch keinen zweiten vollständigen Dateispeicher. Für große HTTP-Uploads gelten zusätzlich die Einstellungen des eigenen [Reverse Proxys](PROXY.md). Die MP4-/Videoprüfung und getrennte Benutzerrechte bleiben erforderlich.

@@ -12,6 +12,7 @@ CATALOG = (
     ('discord', 'Plattformen & Chat', 'Discord-Bot', 'Bot-Einrichtung, Discord-Chat und Discord im Widget.'),
     ('webrtc', 'Medien', 'WebRTC', 'Browser-Kamera und WebRTC-Vorschau. Die HLS-Programmvorschau bleibt verfügbar.'),
     ('recording', 'Medien', 'Neue Aufnahmen', 'Manuelle Programm-/Quellenaufnahme und native MediaMTX-Aufnahme. Vorhandene Dateien bleiben erhalten.'),
+    ('ftp', 'Medien', 'FTP-Uploads', 'Persönliche FTPS-Zugänge und automatische Video-Importe. Zugangsdaten und Dateien bleiben bei einer Sperre erhalten.'),
     ('playlists', 'Medien', 'Playlists', 'Video-Playlists, Offline-Fallback und zeitgesteuerte Ausspielung. Gespeicherte Medien und Regeln bleiben erhalten.'),
     ('playback', 'Medien', 'Playback & Clips', 'Zeitversetzte Segmentwiedergabe und Clip-Verwaltung.'),
     ('viewers', 'Medien', 'Öffentliche Zuschauerlinks', 'Öffentliche HLS-Player. Gespeicherte Links bleiben erhalten, sind während der Sperre unbenutzbar.'),
@@ -68,7 +69,7 @@ class ServicePolicy:
     def owned_paths(self, user):
         c = self.c
         return ({user['prefix'] + row['key'] for row in c.MODEL.sources(user, archived=True)}
-                | {user['prefix'] + 'replay'}
+                | {user['prefix'] + 'replay',user['prefix']+'playlist-source2'}
                 | {row[key] for row in c.MODEL.programs(user, archived=True) for key in ('path', 'rtc_path')}
                 | {c.output_path(user, kind) for kind in c.output_kinds(user)})
 
@@ -87,7 +88,7 @@ class ServicePolicy:
             if not path.startswith('/watch/') and not c.current():
                 return
             requirements = []
-            for prefix, key in (('/api/playlists', 'playlists'), ('/api/playlist-folders', 'playlists'), ('/api/playout', 'playlists'),('/oauth/twitch', 'twitch'), ('/api/twitch/', 'twitch'),
+            for prefix, key in (('/api/ftp','ftp'),('/api/admin/users/', 'ftp') if request.path.endswith('/ftp') else ('/__no_ftp_route__','ftp'),('/api/planner','automation'),('/api/planner','playlists'),('/api/playlists', 'playlists'), ('/api/playlist-folders', 'playlists'), ('/api/playout', 'playlists'),('/oauth/twitch', 'twitch'), ('/api/twitch/', 'twitch'),
                                 ('/oauth/youtube', 'youtube'), ('/api/youtube/', 'youtube'),
                                 ('/api/discord', 'discord'), ('/api/routing', 'advanced_routing'),
                                 ('/api/custom-outputs', 'advanced_routing'), ('/api/scenes', 'advanced_routing'),
@@ -209,9 +210,9 @@ class ServicePolicy:
                     c.CHAT.stop_platform(uid, platform, clear=False)
         if hasattr(c, 'PLAYLISTS'):
             from routing_model import job_key
-            for job in list(c.PLAYLISTS.jobs.values()):
+            for key,job in list(c.PLAYLISTS.jobs.items()):
                 if not flags['playlists'] or not flags['automation'] and job.get('scheduled'):
-                    c.ENGINE.stop_relay(job_key({'id':job['user_id']}, job['program']))
+                    c.ENGINE.stop_relay(job_key({'id':key[0]}, key[1]))
         if not flags['recording']:
             for uid in list(c.ENGINE.recorders):
                 c.ENGINE.stop_record(uid, 'Aufnahmedienst durch Administration gesperrt.')

@@ -25,12 +25,14 @@ class ProgramPreview:
                 return job
             self.stop(key)
             # The program is normalized to H264 without B-frames. Only its AAC
-            # audio needs converting to Opus for browser WebRTC playback.
+            # audio needs converting to Opus. Preserve its timing relative to
+            # the copied video, including after a delayed playlist start.
             command = ['ffmpeg', '-hide_banner', '-nostdin', '-loglevel', 'error',
-                '-rtsp_transport', 'tcp', '-timeout', '15000000', '-analyzeduration', '1000000', '-probesize', '1000000',
-                '-i', c.RTSP + definition['path'], '-map', '0:v:0', '-map', '0:a:0?',
+                '-rtsp_transport', 'tcp', '-timeout', '15000000', '-analyzeduration', '2000000', '-probesize', '4000000',
+                '-i', c.RTSP + definition['path'], '-map', '0:v:0', '-map', '0:a:0',
                 '-c:v', 'copy',
-                '-c:a', 'libopus', '-ar', '48000', '-ac', '2', '-b:a', '96k', '-f', 'rtsp', '-rtsp_transport', 'tcp',
+                '-c:a', 'libopus', '-ar', '48000', '-ac', '2', '-b:a', '96k',
+                '-af', 'aresample=async=1', '-max_interleave_delta', '1000000', '-flush_packets', '1', '-f', 'rtsp', '-rtsp_transport', 'tcp', '-pkt_size', '1200',
                 c.RTSP + self.path(user,program)]
             try:
                 with (c.DATA / ('program-preview-' + str(user['id']) + ('-'+program if program!='main' else '') + '.log')).open('wb') as log:
@@ -43,17 +45,26 @@ class ProgramPreview:
 
     def ensure(self, user, program='main'):
         job = self.start(user,program)
+        # WHEP negotiation can still be gathering ICE candidates after the
+        # encoder becomes ready. It must not be reaped as an idle preview.
+        job['pending_until']=time.monotonic()+45
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
             if job['process'].poll() is not None:
                 break
             try:
-                if self.c.mtx('paths/get/' + self.path(user,program)).get('online'):
+                state=self.c.mtx('paths/get/' + self.path(user,program))
+                codecs={str(track.get('codec','') if isinstance(track,dict) else track).lower() for track in (state.get('tracks2') or state.get('tracks') or [])}
+                if state.get('online') and {'h264','opus'}<=codecs:
+                    job['used']=time.monotonic()
                     return self.path(user,program)
             except self.c.Error:
                 pass
             time.sleep(.1)
-        raise self.c.Error('Die WebRTC-Programmvorschau liefert noch kein Signal. FFmpeg und MediaMTX prüfen.')
+        key=job_key(user,program)
+        with self.c.LOCK:
+            if self.jobs.get(key) is job:self.stop(key)
+        raise self.c.Error('Das Programm liefert noch kein vollständiges H.264-/Opus-Signal für WebRTC. Bitte erneut starten; der Vorschauprozess wurde zurückgesetzt.')
 
     def stop(self, uid):
         job = self.jobs.pop(uid, None)
@@ -85,7 +96,7 @@ class ProgramPreview:
                         self.stop(key);self.retry[key] = now+5;job=None
                     if job and readers:
                         job['used'] = now
-                    elif job and now-job['used']>20:
+                    elif job and now-job['used']>20 and now>=job.get('pending_until',0):
                         self.stop(key)
                     elif not job and readers and now>=self.retry.get(key,0):
                         self.start(user,pid)

@@ -12,11 +12,13 @@
     <link rel="stylesheet" href="/static/features.css?v={{app_version}}&amp;b={{asset_build}}">
     <script src="/static/chat.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
     <script src="/static/uploads.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
+    <script src="/static/studio.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
     <script src="/static/playlists.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
     <script src="/static/services.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
     <script src="/static/app.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
     <script src="/static/features.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
     <script src="/static/expansion.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
+    <script src="/static/preview-audio.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
     <script src="/static/routing.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
     <script src="/static/automation.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
     <script src="/static/i18n.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
@@ -43,7 +45,7 @@
                     stroke="currentColor" stroke-width="1.6" aria-hidden="true">
                     <rect x="3" y="4" width="18" height="16" rx="2" />
                     <path d="m10 8 6 4-6 4z" />
-                </svg><span>Offline-Videos</span></a><a class="menu-link" href="#playlists"><span>▷ Playlists</span></a><a class="menu-link" href="#recordings"><svg viewBox="0 0 24 24"
+                </svg><span>Offline-Videos</span></a><a class="menu-link" href="#media"><span>▧ Medien</span></a><a class="menu-link" href="#playlists"><span>▷ Playlists</span></a><a class="menu-link" href="#planner"><span>▦ Planer</span></a><a class="menu-link" href="#recordings"><svg viewBox="0 0 24 24"
                     fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
                     <circle cx="12" cy="12" r="9" />
                     <circle cx="12" cy="12" r="3" />
@@ -146,6 +148,11 @@
                             <div class="placeholder"><span>▣</span>
                                 <p>Vorschau deines fertigen Streams</p>
                             </div><iframe allow="autoplay; fullscreen" hidden="" title="Ausgangsvorschau"></iframe>
+                        </div>
+                        <div id="program-audio" class="preview-audio" aria-label="Ton der Programmvorschau">
+                            <button id="program-audio-toggle" class="secondary" type="button" aria-pressed="false" disabled>Ton einschalten</button>
+                            <label for="program-volume">Lautstärke <output id="program-volume-value" for="program-volume">70 %</output><input id="program-volume" type="range" min="0" max="100" step="1" value="70" disabled></label>
+                            <span id="program-audio-status" class="small muted" role="status">Vorschau wird geladen …</span>
                         </div>
                         <div class="program-link-row"><label>Link zur ausgewählten Programmvorschau<input id="program-link" type="text" readonly></label><button id="program-link-copy" class="ghost" type="button">Link kopieren</button><a id="program-link-open" target="_blank" rel="noopener">Vorschau öffnen ↗</a><a data-service="webrtc" id="program-webrtc-open" target="_blank" rel="noopener" data-expert-only {% if not expert %}hidden{% endif %}>WebRTC mit Ton ↗</a><p class="small muted">Privater Vorschau-Link · Anmeldung erforderlich.</p><p id="program-playout" class="small" role="status"></p></div>
                         <div class="source-footer">
@@ -250,7 +257,7 @@
             </section>
             <section class="app-view" data-view="videos" aria-label="Offline-Videos" hidden>
                 <details class="panel upload-drawer">
-                    <summary>＋ Neues Offline-Video hochladen <span>MP4 · bis 500 MB</span></summary>
+                    <summary>＋ Neues Offline-Video hochladen <span>MP4</span></summary>
                     <article class="panel">
                         <div class="section-heading">
                             <h2>Offline-Video</h2><span class="tag">Dauerschleife</span>
@@ -259,7 +266,7 @@
                             bleibt dabei bestehen.</p>
                         <form id="upload-form" data-upload-form data-upload-url="/api/upload"><label class="upload-box">↑ <strong>Mehrere MP4-Dateien auswählen</strong><input
                                     accept="video/mp4,.mp4" name="video" multiple required="" type="file" /><span
-                                    class="small muted">Max. 500 MB · 5 Minuten · Ton wird übernommen, falls
+                                    class="small muted">Keine feste Datei- oder Laufzeitgrenze; ausreichend Speicher für die Umwandlung erforderlich. Ton wird übernommen, falls
                                     vorhanden</span></label><button class="secondary" id="upload-button"
                                 type="submit">Zur Bibliothek hinzufügen</button></form><progress
                             aria-label="Upload-Fortschritt" hidden="" id="upload-meter" max="100" value="0"></progress>
@@ -379,6 +386,7 @@
                 </div>
             </section>
             {% include 'playlists.html' %}
+            {% include 'studio.html' %}
             {% include 'settings-pages.html' %}
             {% include 'expert-pages.html' %}
             <section class="app-view" data-view="account" aria-label="Mein Konto" hidden>                        <section class="panel wide-details">
@@ -393,8 +401,9 @@
                                     ändern</button>
                             </form>
                         </section>{% include 'build-d.html' %}</section>
-            {% if user.admin %}<nav id="admin-subnav" class="settings-subnav" aria-label="Administrations-Untermenü" hidden><a href="#administration">Benutzer &amp; Plattform-Apps</a><a href="#administration-services">Dienste &amp; Freigaben</a></nav>
+            {% if user.admin %}<nav id="admin-subnav" class="settings-subnav" aria-label="Administrations-Untermenü" hidden><a href="#administration">Benutzer &amp; Plattform-Apps</a><a href="#administration-ftp">FTP-Zugänge</a><a href="#administration-services">Dienste &amp; Freigaben</a></nav>
             {% include 'admin-services.html' %}
+            <section class="app-view" data-view="administration-ftp" aria-label="FTP-Zugänge" hidden></section>
             <section class="app-view" data-view="administration" aria-label="Administration" hidden>
                 <section class="panel wide-details" id="admin">
                     <h2>Administration </h2>

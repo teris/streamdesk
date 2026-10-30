@@ -1,6 +1,6 @@
 # MediaMTX - StreamDesk
 
-**Aktuelle Version: 1.1.8**
+**Aktuelle Version: 2.0.0-rc6**
 
 Eine selbst gehostete Mehrbenutzer-Oberfläche für OBS-/Handy-Streams, manuelle Aufnahmen, Offline-Videos, Multistreaming und gemeinsamen Twitch-/YouTube-Chat.
 
@@ -18,16 +18,19 @@ Expertenmodus: zusätzliche Quellen und Konten
 
 - Mehrfachupload mit Warteschlange, Datenmengen-/Uploadfortschritt und gemessenem Umwandlungsfortschritt je Datei; Videos in beiden Bibliotheken umbenennen und mit sichtbaren Nutzungshinweisen löschen.
 
-- Eigene Playlists mit Ordnern, Video-Reihenfolge und Dauerschleifen; Fortsetzen nach Live-Unterbrechung, verzögerter Offline-Fallback sowie Wochenzeitpläne und unterschiedliche Playlists je Ausgang im Expertenmodus.
+- Getrennte Bereiche **Medien** für Dateien, Ordner und Uploads sowie **Playlists** für Zusammenstellung, Reihenfolge und Verwaltung. Mehrfachauswahl mit Ordnerfilter und Suche; gemeinsames Ersatzprogramm über Source 2, ein Playlist-Encoder je Benutzer, Fortsetzen nach Live-Unterbrechung und grafischer Scheduler im Expertenmodus.
+- Eigener **Planer** für wiederkehrende Streams: gewählte Anbieter starten auch ohne Anmeldung oder Live-Signal mit einer Playlist; optionaler Abgleich mit dem Twitch-Sendeplan.
+- Persönliche FTPS-Zugänge mit getrenntem Passwort, automatischem Video-Import ohne feste Größen-/Laufzeitgrenze und Pure-FTPd im nativen Installer. Importfortschritt, Fehler und erneuter Import sind unter „Medien“ sichtbar. Nur Administratoren richten Zugänge ein; Benutzer verwalten ihren Zugang unter „Mein Konto“. Web-Uploads sind per FTP sichtbar; neue Uploads sind auch direkt in „Bibliothek“ und deren Unterordner möglich.
+- Persönliche Umschalttexte und eine Playlist-Kennzeichnung, standardmäßig „Wiederholung“, an einer von vier Bildecken.
 
-- Eigener Expertenmodus mit Untermenüs für technische MediaMTX-Einstellungen und zusätzlicher serverseitiger Prüfung; nach jeder neuen Anmeldung ausgeschaltet. Globale MediaMTX-Einstellungen benötigen zusätzlich Administratorrechte.
+- Eigener Expertenmodus mit Untermenüs für technische MediaMTX-Einstellungen und zusätzlicher serverseitiger Prüfung; pro Benutzer gespeichert und bei der nächsten Anmeldung wiederhergestellt. Globale MediaMTX-Einstellungen benötigen zusätzlich Administratorrechte.
 - Zentrale Dienstfreigaben unter **Administration → Dienste & Freigaben**: Nur Administratoren können Funktionen für alle Benutzer sperren; Zugangsdaten, Einstellungen und Aufnahmen bleiben erhalten.
 - Quellen und Prioritäten pro Ausgang, einzelne Streamingziele starten/stoppen, WebRTC-Kamera/-Vorschau, native segmentierte Aufnahmen und widerrufbare öffentliche HLS-Zuschauer-Links im Expertenmodus.
 - Geschützte zeitversetzte Wiedergabe eigener nativer Aufnahmen, mit optionalem Playback-Server und Ausschnitten bis zu einer Stunde.
 - Helles, dunkles oder System-Theme pro Benutzer sowie mobile Bedienelemente, immer verfügbar.
 - Kompaktes Dashboard mit Empfangs-/Sendedatenrate, aktuellem Programm, eigener Medienbelegung sowie aktueller und gesamter erfasster Sendezeit.
 - Persönliche Konten mit zwei festen Standardquellen: Source 1 vor Source 2. Zusätzliche Publish-/öffentliche RTSP-Pull-Quellen werden nur im Expertenmodus angelegt.
-- Persönliche Offline-Videobibliothek: MP4 bis 500 MiB und fünf Minuten, Auswahl, Vorschau und Löschen. Die Offline-Schleife läuft bei Programmvorschau, Programmaufnahme oder aktivem Ausgang.
+- Persönliche Offline-Videobibliothek: MP4 ohne feste Größen- oder Laufzeitgrenze, Auswahl, Vorschau und Löschen. Freier Speicher für Original und Umwandlung ist erforderlich. Die Offline-Schleife läuft bei Programmvorschau, Programmaufnahme oder aktivem Ausgang.
 - Positionierbare Textbeschriftung und live gerenderte Browser-Overlays, etwa von StreamElements. Der Overlay-Browser liefert Bild und Animationen; dessen Audio wird nicht übernommen.
 - Umschaltbare Programmvorschau je Ausgang mit sichtbarem privatem Link im Dashboard; auch ohne Streamingziel verfügbar.
 - Dauerhafter Programmpfad; Programmaufnahmen laufen beim Wechsel zwischen Quellen und Offline-Video weiter.
@@ -43,9 +46,9 @@ Expertenmodus: zusätzliche Quellen und Konten
 
 ### Dashboard
 
-Streamstatus, umschaltbare Programmvorschau mit privatem Link und gemeinsamer Live-Chat auf einen Blick.
+Streamstatus, umschaltbare Programmvorschau mit sichtbarer Tonsteuerung, privatem Link und gemeinsamer Live-Chat auf einen Blick.
 
-![StreamDesk-Dashboard mit Programmvorschau, Streamstatus und Live-Chat](screenshoots/dashboard.png)
+![StreamDesk-Dashboard mit Programmvorschau, Streamstatus und Live-Chat](screenshoots/dashboard-ton-2.0.0-rc4.png)
 
 <details>
 <summary>Quellen – getrennte Vorschauen und Verbindungsdaten</summary>
@@ -83,9 +86,16 @@ Streamstatus, umschaltbare Programmvorschau mit privatem Link und gemeinsamer Li
 </details>
 
 <details>
-<summary>Playlists – Ordner, Reihenfolge und Video-Uploads</summary>
+<summary>Medien – Ordner, Videos und Uploads</summary>
 
-![Playlist-Verwaltung mit Ordnern, Video-Reihenfolge und Upload](screenshoots/playlists-1.1.7.png)
+![Medienverwaltung mit Unterordnern, Video-Uploads und FTP-Importfortschritt ohne feste Dateigrenze](screenshoots/medien-2.0.0-rc6.png)
+
+</details>
+
+<details>
+<summary>Playlists – Zusammenstellung, Reihenfolge und Verwaltung</summary>
+
+![Separate Playlist-Verwaltung mit Playlist-Liste, Editor und Video-Mehrfachauswahl](screenshoots/playlists-2.0.0-rc4.png)
 
 </details>
 
@@ -97,9 +107,31 @@ Streamstatus, umschaltbare Programmvorschau mit privatem Link und gemeinsamer Li
 </details>
 
 <details>
-<summary>Playlist-Ausspielung – Fallback, Zeitfenster und Ausgänge</summary>
+<summary>Playlist-Scheduler – gemeinsames Source-2-Programm und Zeitfenster</summary>
 
-![Expertenbereich für Playlist-Fallback und Zeitpläne je Ausgang](screenshoots/playlist-zeitplan-1.1.7.png)
+![Expertenbereich für gemeinsame Playlist, Fallback und grafischen Tagesplan](screenshoots/playlist-scheduler-2.0.0-rc4.png)
+
+</details>
+
+<details>
+<summary>Planer – geplante Streams und automatische Anbieter-Verbindungen</summary>
+
+![Persönlicher Stream-Planer mit wiederkehrenden Sendezeiten und Anbieter-Auswahl](screenshoots/planer-2.0.0-rc4.png)
+
+</details>
+
+
+<details>
+<summary>Mein Konto – persönlicher FTP-Zugang und Passwortverwaltung</summary>
+
+![Mein Konto mit FTPS-Verbindungsdaten, Ingest-Adresse, Bibliothek und Passwortverwaltung](screenshoots/ftp-verbindung-2.0.0-rc6.png)
+
+</details>
+
+<details>
+<summary>Administration – FTP-Zugänge je Benutzer</summary>
+
+![FTP-Verwaltung mit Benutzerwahl, Freigabe, Verbindungsdaten und Speicherbestätigung](screenshoots/ftp-verwaltung-2.0.0-rc4.png)
 
 </details>
 
@@ -146,6 +178,7 @@ Es gibt kein öffentliches Standardpasswort. Das Administratorkonto wird mit ein
 - [OBS und SRT-Verbindungsprobleme](docs/SRT.md)
 - [Reverse Proxy und NPMplus](docs/PROXY.md)
 - [Twitch- und Google-/YouTube-Kontofreigabe](docs/OAUTH.md)
+- [Studio 2.0: Planer, gemeinsames Source-2-Programm, FTPS und persönliche Texte](docs/STUDIO_2.md)
 - [Playlists, Offline-Fallback und zeitgesteuerte Ausspielung](docs/PLAYLISTS.md)
 - [Discord-Bot erstellen und im Expertenmodus verbinden](docs/DISCORD.md)
 - [Dienste als Administrator global sperren und freigeben](docs/ADMIN_SERVICES.md)

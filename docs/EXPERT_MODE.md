@@ -1,6 +1,6 @@
-# Expertenmodus und Medienerweiterungen · 1.1.8
+# Expertenmodus und Medienerweiterungen · 2.0.0-rc6
 
-Den eigenen Menüpunkt **Expertenmodus** öffnen, den Modus aktivieren und **Modus übernehmen** wählen. Die Untermenüs „Protokolle & WebRTC“, „Quellen & Routing“, „Ausgänge & Konten“, „Native Aufnahme“, „Playback“, „Zuschauerfreigabe“, „Neuverbindung“, „Automation & Export“ und „Discord-Bot“ bündeln die technischen Einstellungen. Die normalen Ansichten behalten ihre grundlegenden Funktionen. Er gilt für die aktuelle Anmeldung. Eine weitere Anmeldung startet mit ausgeschaltetem Expertenmodus, auch beim selben Benutzer. Das Backend prüft technische Anfragen zusätzlich zur Sichtbarkeit in der Oberfläche. Ein Administratorkonto umgeht diese Prüfung nicht.
+Den eigenen Menüpunkt **Expertenmodus** öffnen, den Modus aktivieren und **Modus übernehmen** wählen. Die Untermenüs „Protokolle & WebRTC“, „Quellen & Routing“, „Ausgänge & Konten“, „Native Aufnahme“, „Playback“, „Zuschauerfreigabe“, „Neuverbindung“, „Automation & Export“ und „Discord-Bot“ bündeln die technischen Einstellungen. Die normalen Ansichten behalten ihre grundlegenden Funktionen. Die Entscheidung wird pro Benutzer gespeichert und bei einer neuen Passwort-, Passkey- oder Recovery-Anmeldung wiederhergestellt. Andere bereits laufende Sitzungen behalten ihre bisherige Freigabe. Das Backend prüft technische Anfragen zusätzlich zur Sichtbarkeit in der Oberfläche. Ein Administratorkonto umgeht diese Prüfung nicht.
 
 | Immer verfügbar | Nur im Expertenmodus |
 | --- | --- |
@@ -115,4 +115,6 @@ Administratoren können unter **Administration** einen anderen Benutzer zunächs
 
 ## Playlists ab 1.1.7
 
-Die normale Ansicht **Playlists** verwaltet Medien, Ordner und Reihenfolge. **Expertenmodus → Playlist-Ausspielung** ergänzt Regeln je Quelle/Ausgang, Fallback-Verzögerung, Wochentage und Zeitzonen. Echte Live-Quellen haben Vorrang; unterbrochene Playlists behalten ihre Position. Details und Beispiele: [Playlists](PLAYLISTS.md).
+Die normale Ansicht **Playlists** verwaltet Medien, Ordner und Reihenfolge. **Expertenmodus → Playlist-Ausspielung** ergänzt eine gemeinsame Source-2-Regel, Fallback-Verzögerung, Wochentage, Zeitzonen und eine grafische Übersicht. Der normale **Planer** verwaltet automatische Sendezeiten für ausgewählte Anbieter. Echte Live-Quellen haben Vorrang; unterbrochene Playlists behalten ihre Position. Details und Beispiele: [Playlists](PLAYLISTS.md).
+
+Die Änderungen ab 2.0 einschließlich persönlicher Wiederholungskennzeichnung und FTPS sind im [Studio-Leitfaden](STUDIO_2.md) beschrieben.

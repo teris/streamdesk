@@ -62,6 +62,26 @@ class MediaConfigTests(unittest.TestCase):
         mutations = [c for c in calls if c[1] is not None]
         self.assertEqual([c[0] for c in mutations], ['config/paths/add/streamdesk/admin/source1'])
 
+    def test_explicit_legacy_paths_are_synchronized_without_touching_foreign_paths(self):
+        calls=[]
+        config={'authInternalUsers':[],'paths':{'live':{'source':'publisher','alwaysAvailable':True},'playlist-source2':{'source':'publisher'},'camera':{'source':'publisher','record':True}}}
+        def api(path,value=None,method=None):
+            calls.append((path,value,method))
+            if path=='config/global/get':return {'authInternalUsers':[]}
+            if path.startswith('config/paths/list'):return {'items':[{'name':'live','source':'publisher','alwaysAvailable':False},{'name':'camera','source':'publisher','record':False}]}
+            return {}
+        synchronize_runtime(api,config,'streamdesk',owned_paths={'live','playlist-source2'})
+        self.assertEqual({path for path,value,method in calls if value is not None},{'config/paths/patch/live','config/paths/add/playlist-source2'})
+    def test_exact_legacy_service_permissions_remain_local_and_idempotent(self):
+        config=self.base();owned={'source1','source2','live','playlist-source2','webrtc-program'}
+        foreign=copy.deepcopy(config['authInternalUsers'][1])
+        merge_auth(config,'streamdesk',[],owned_paths=owned);first=copy.deepcopy(config)
+        merge_auth(config,'streamdesk',[],owned_paths=owned)
+        self.assertEqual(first,config);self.assertEqual(config['authInternalUsers'][1],foreign)
+        local=next(row for row in config['authInternalUsers'] if row==service_acl('streamdesk',owned_paths=owned))
+        self.assertEqual(local['ips'],['127.0.0.1','::1'])
+        self.assertTrue(any(p=={'action':'read','path':'playlist-source2'} for p in local['permissions']))
+        self.assertFalse(any(p['action'] in ('publish','read') and not p['path'] for p in local['permissions']))
     def test_rejects_anonymous_public_control_api(self):
         config = self.base()
         config['authInternalUsers'][0]['permissions'].append({'action':'api','path':''})

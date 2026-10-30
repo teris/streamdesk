@@ -26,3 +26,13 @@ p {
 p[hidden] {
     display: none
 }
+body {display:grid;grid-template-rows:minmax(0,1fr) auto;overflow:hidden}
+video {min-height:0;min-width:0}
+.player-audio {display:flex;flex-wrap:wrap;align-items:center;gap:10px;padding:10px;background:#151821;color:#e4e7ee;font-size:13px}
+.player-audio[hidden] {display:none}
+.player-audio button {padding:8px 12px;min-height:36px;background:#6944b6;color:white;border:1px solid #b299df;border-radius:7px;cursor:pointer;font:inherit}
+.player-audio button:focus-visible,.player-audio input:focus-visible {outline:2px solid #e4d3ff;outline-offset:2px}
+.player-audio label {display:flex;align-items:center;gap:8px}
+.player-audio input {width:95px;accent-color:#b78be9}
+.player-audio span {font-size:12px}
+body.embedded-program {grid-template-rows:minmax(0,1fr)}

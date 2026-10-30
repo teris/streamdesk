@@ -46,7 +46,7 @@ def main():
                     page.click('form button[type=submit]');page.wait_for_url(address+'/');return page
                 admin=login('studioadmin');user=login('viewer')
                 admin.goto(address+'/#administration-services');admin.wait_for_selector('[data-service-id="discord"]')
-                assert admin.locator('.service-card').count()==13
+                assert admin.locator('.service-card').count()==14
                 assert not user.locator('a[href="#administration-services"]').count()
                 assert user.request.get(address+'/api/admin/services').status==403
                 user.goto(address+'/#expert');user.check('#expert-mode');user.click('#expert-form button');user.wait_for_function('() => !busy')

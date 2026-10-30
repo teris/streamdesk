@@ -6,9 +6,9 @@
 - amd64 oder arm64 für die gemeinsame Neuinstallation. Bereits installierte MediaMTX-Binaries anderer Architekturen können im Attach-Modus verwendet werden.
 - MediaMTX **1.21.x ab 1.21.3**. Das Zielprofil wird mit `--mediamtx-major 1` explizit gewählt. Ungeprüfte Minor- und Major-Schemata werden fail-closed abgewiesen; siehe [Kompatibilitätsmatrix](docs/MEDIAMTX_COMPATIBILITY.md).
 - Eine öffentliche HTTPS-Adresse und Reverse Proxy für Twitch-/YouTube-OAuth. Für einen lokalen Funktionstest ist HTTP möglich; Kontofreigaben erfordern die konfigurierte HTTPS-Adresse.
-- Platz für Videos und Aufnahmen. Bei 6 Mbit/s entstehen ungefähr 2,7 GB pro Aufnahmestunde. Zwei CPU-Kerne und 2 GiB RAM sind ein Ausgangspunkt für einen kleinen Testbetrieb; gleichzeitig verwendete Browser-Overlays brauchen zusätzliche Reserven.
+- Platz für Videos, Upload-Originale und ihre Umwandlung. Videoimporte haben keine feste Größen- oder Laufzeitgrenze; begrenzend ist der freie Speicher. Bei 6 Mbit/s entstehen ungefähr 2,7 GB pro Aufnahmestunde. Zwei CPU-Kerne und 2 GiB RAM sind ein Ausgangspunkt für einen kleinen Testbetrieb; gleichzeitig verwendete Browser-Overlays brauchen zusätzliche Reserven.
 
-Der Installer installiert Python-venv, FFmpeg, DejaVu-Schriften, Chromium und Python-Abhängigkeiten. Python-Pakete liegen ausschließlich im eigenen virtuellen Environment.
+Der Installer installiert Python-venv, FFmpeg, DejaVu-Schriften, Chromium, Pure-FTPd, OpenSSL und Python-Abhängigkeiten. Python-Pakete liegen ausschließlich im eigenen virtuellen Environment.
 
 ## 1. Paket bereitstellen
 
@@ -17,8 +17,8 @@ ZIP auf den Linux-Server übertragen und dort entpacken:
 ```bash
 apt-get update
 apt-get install -y unzip python3
-unzip streamdesk-1.1.8.zip
-cd streamdesk-1.1.8
+unzip streamdesk-2.0.0-rc6.zip
+cd streamdesk-2.0.0-rc6
 bash install.sh --help
 ```
 
@@ -196,3 +196,14 @@ Logs und Wiederherstellungsschritte stehen in [docs/OPERATIONS.md](docs/OPERATIO
 ## Umstieg auf rc.6
 
 Das normale `--mode update` erhält Benutzer, Schlüssel, Medien und tatsächlich konfigurierte zusätzliche Quellen/Ausgänge. Die Datenbank wird beim Start wiederholbar um Routingtabellen und die dauerhafte Benutzer-ID-Vergabe ergänzt. Es gibt danach für neue Benutzer nur zwei feste Standardquellen; zusätzliche Quellen und Konten werden im Expertenmodus angelegt. Die alte globale Quellenfixierung wird durch Prioritäten je Ausgang ersetzt. Nach dem Update unter „Quellen & Routing“ die übernommenen Zuordnungen prüfen.
+
+
+## FTPS ab 2.0.0-rc1
+
+Vor jeder Installation beziehungsweise Aktualisierung kündigt der Installer ausdrücklich die Pure-FTPd-Paketinstallation, die zusätzlichen Dienste und die benötigten Ports an. Dieser Hinweis erscheint vor der Bestätigung und auch bei `--yes` sowie `--dry-run`. Die Serveradresse entspricht immer `--ingest-host`. Ab rc6 weist der Installer auch auf Videoimporte ohne feste Größen-/Laufzeitgrenze und den erforderlichen Speicher für Original und Umwandlung hin.
+
+Der native Installer richtet zusätzlich einen eigenen Pure-FTPd-Dienst für persönliche Video-Uploads ein. Standard: **explizites FTPS auf 2121/TCP**, passive Datenports **30000–30049/TCP**. Bestehende FTP-Dienste bleiben erhalten. Der Installer verbietet automatische Paketentfernungen; bei einem Konflikt mit einem anderen FTP-Server kann das Update mit `--disable-ftp` ausgeführt werden. Der HTTP-Reverse-Proxy leitet diese Ports nicht weiter; in Firewall/NAT gesondert freigeben.
+
+Mit `--ftp-port`, `--ftp-passive-range`, `--ftp-public-ip` und `--ftp-certificate` können Port, passive Ports, öffentliche NAT-Adresse und eine PEM-Datei aus Zertifikat/Schlüssel angepasst werden. Ohne eigenes Zertifikat erzeugt der Installer ein selbstsigniertes Zertifikat. `--disable-ftp` deaktiviert den eigenen Dienst, `--enable-ftp` aktiviert ihn bei einem späteren Installer-Aufruf wieder. Zugangsdaten werden anschließend je Benutzer in der Administration angelegt. Details: [Studio 2.0](docs/STUDIO_2.md#persönliche-ftp-zugänge).
+
+Nach dem Update bitte die gemeinsame Source-2-Playlist prüfen: Frühere getrennte Ausspielregeln werden wie in der [Migrationsbeschreibung](docs/STUDIO_2.md#eine-gemeinsame-playlist-über-source-2) zusammengeführt. Twitch für die optionale Übergabe des Sendeplans erneut verbinden. MediaMTX bleibt auf dem geprüften Profil 1.21.x; die StreamDesk-Versionsnummer 2.0 führt kein MediaMTX-Major-Update aus.

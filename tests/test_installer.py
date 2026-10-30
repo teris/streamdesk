@@ -149,3 +149,62 @@ class PlaybackInstallerTests(unittest.TestCase):
         self.assertTrue(config['playback'])
         self.assertEqual(config['playbackAddress'],'127.0.0.1:29996')
         self.assertFalse(installer.fresh_config(installer.parse(['--mode','standalone']))['playback'])
+
+class FTPInstallerTests(unittest.TestCase):
+    def test_ftp_units_use_private_auth_tls_and_separate_listener(self):
+        a=installer.parse([]);a.app_dir=Path('/opt/streamdesk');a.data_dir=Path('/var/lib/streamdesk')
+        identity=SimpleNamespace(pw_name='streamdesk',pw_uid=123,pw_gid=456)
+        units=installer.ftp_units(a,identity)
+        self.assertIn('-Y 3',units['streamdesk-ftp']);self.assertIn('-S 0.0.0.0,2121',units['streamdesk-ftp'])
+        self.assertIn('extauth:/run/streamdesk-ftp/auth.sock',units['streamdesk-ftp'])
+        self.assertIn('pure-authd -u 123 -g 456',units['streamdesk-ftp-auth']);self.assertNotIn('pure-pw',str(units))
+        self.assertIn('stats:/var/log/streamdesk-ftp/transfers.log',units['streamdesk-ftp'])
+    def test_ftp_program_modules_ship_in_installer(self):
+        for name in ('ftp_auth.py','ftp_features.py','studio_features.py'):self.assertIn(name,installer.FILES)
+        self.assertTrue(installer.parse(['--enable-ftp']).enable_ftp)
+    def test_ftp_install_generates_only_owned_units_and_private_certificate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary);a=installer.parse([]);a.app_dir=root/'app';a.data_dir=root/'data';a.data_dir.mkdir();(a.app_dir/'scripts').mkdir(parents=True);a.ingest_host='ftp.example.test'
+            etc=root/'etc';units=root/'units';etc.mkdir();units.mkdir();identity=SimpleNamespace(pw_name='streamdesk',pw_uid=123,pw_gid=456)
+            (etc/'streamdesk-ftp.pem').write_text('fixture-existing-certificate')
+            with patch.object(installer,'ENV_DIR',etc),patch.object(installer,'SYSTEMD_UNIT_DIR',units),patch.object(installer.os,'chown'),patch.object(installer,'run') as run,patch.object(installer,'FTP_LOG_ROOT',root/'logs'),patch.object(installer,'wait_ftp'):
+                installer.configure_ftp(a,identity)
+            self.assertEqual({p.name for p in units.iterdir()},{'streamdesk-ftp.service','streamdesk-ftp-auth.service'})
+            self.assertEqual((etc/'streamdesk-ftp.pem').read_text(),'fixture-existing-certificate')
+            self.assertEqual((etc/'streamdesk-ftp.pem').stat().st_mode&0o777,0o600)
+            commands=[call.args[0] for call in run.call_args_list]
+            self.assertFalse(any('pure-ftpd.service' in str(command) for command in commands))
+            self.assertEqual((etc/'streamdesk-ftp.env').stat().st_mode&0o777,0o600)
+
+    def test_ftp_readiness_requires_a_greeting_and_healthy_owned_services(self):
+        args=installer.parse([]);connection=MagicMock();connection.__enter__.return_value=connection
+        with patch.object(installer.socket,'create_connection',return_value=connection),patch.object(installer,'run') as run,patch.object(installer.time,'sleep'):
+            connection.recv.return_value=b'220 Ready\r\n';installer.wait_ftp(args)
+            run.assert_called_once_with(['systemctl','is-active','--quiet','streamdesk-ftp-auth','streamdesk-ftp'])
+            connection.recv.return_value=b'Not an FTP greeting'
+            with self.assertRaisesRegex(RuntimeError,'antwortet nicht'):installer.wait_ftp(args)
+
+    def test_dependency_install_never_removes_an_existing_ftp_server(self):
+        args=installer.parse([])
+        with patch.object(installer.shutil,'which',return_value='/fixture/program'),patch.object(installer.Path,'is_file',return_value=True),patch.object(installer,'run') as run:
+            installer.dependencies(args)
+            command=run.call_args_list[1].args[0];self.assertIn('--no-remove',command);self.assertIn('pure-ftpd',command)
+            run.reset_mock();args.disable_ftp=True;installer.dependencies(args)
+            command=run.call_args_list[1].args[0];self.assertIn('--no-remove',command);self.assertNotIn('pure-ftpd',command)
+
+    def test_ftp_notice_describes_package_install_and_ingest_before_update(self):
+        args=installer.parse(['--mode','update','--ingest-host','135.125.128.226'])
+        notice=installer.ftp_install_notice(args)
+        self.assertIn('VOR DEM UPDATE',notice);self.assertIn('Pure-FTPd (FTP-Server)',notice);self.assertIn('installiert',notice)
+        self.assertIn('135.125.128.226',notice);self.assertIn('2121',notice);self.assertIn('30000:30049',notice)
+        self.assertIn('--disable-ftp',notice)
+        args.disable_ftp=True;self.assertIn('nicht neu installiert',installer.ftp_install_notice(args))
+        args.disable_ftp=False;args.skip_system_packages=True;self.assertIn('ausdrücklich übersprungen',installer.ftp_install_notice(args))
+    def test_ftp_notice_precedes_any_installer_mutation_in_main(self):
+        args=installer.parse(['--mode','update','--ingest-host','ingest.example.test']);args.public_url='https://panel.example.test';args.mediamtx_config=Path('/opt/mediamtx/mediamtx.yml')
+        import contextlib,io
+        output=io.StringIO()
+        def stop_before_changes(*_):
+            self.assertIn('Pure-FTPd (FTP-Server)',output.getvalue());raise RuntimeError('stop before mutations')
+        with patch.object(installer,'parse',return_value=args),patch.object(installer,'validate',return_value={}),patch.object(installer.os,'geteuid',return_value=0),patch.object(installer.Path,'exists',return_value=True),patch.object(installer.Path,'read_text',return_value='ID=debian\nVERSION_ID=13\n'),patch.object(installer.sys.stdin,'isatty',return_value=False),patch.object(installer,'install',side_effect=stop_before_changes),contextlib.redirect_stdout(output):
+            with self.assertRaisesRegex(RuntimeError,'stop before mutations'):installer.main([])

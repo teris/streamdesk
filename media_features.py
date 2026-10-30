@@ -171,6 +171,7 @@ class MediaFeatures:
         def expert_mode(user):
             enabled = self.boolean(self.body(), 'enabled')
             session['expert_mode'] = enabled
+            c.write('UPDATE users SET expert_preference=? WHERE id=?',(int(enabled),user['id']))
             return jsonify(ok=True, expert_mode=enabled)
 
         @app.get('/api/expert-mode')
@@ -335,7 +336,7 @@ class MediaFeatures:
         @app.get('/watch/<token>/')
         def watch(token):
             user = self.viewer(token)
-            return render_template('player.html', viewer=user['username'])
+            return render_template('player.html', viewer=user['username'],switch_text=user['switch_text'])
 
         @app.get('/watch/<token>/<asset>')
         def viewer_asset(token, asset):

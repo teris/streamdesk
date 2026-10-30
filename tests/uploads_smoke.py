@@ -41,7 +41,7 @@ def main():
                 page=context.new_page();errors=[];page.on('pageerror',lambda error:errors.append(str(error)))
                 page.goto(address+'/login');page.fill('[name=username]','uploadstudio');page.fill('[name=password]','Uploads-Smoke-Password-123');page.click('form button[type=submit]');page.wait_for_url(address+'/')
                 csrf=page.locator('meta[name=csrf-token]').get_attribute('content');headers={'X-CSRF-Token':csrf}
-                page.goto(address+'/#playlists');page.wait_for_selector('#playlist-folder-form')
+                page.goto(address+'/#media');page.wait_for_selector('#playlist-folder-form')
                 page.fill('#playlist-folder-form [name=name]','Upload-Ordner');page.click('#playlist-folder-form button');page.wait_for_function('() => !busy')
                 folder=core.rows('SELECT id FROM playlist_folders WHERE user_id=?',(uid,))[0]['id']
                 assert page.locator('#playlist-upload [name=video]').get_attribute('multiple') is not None
@@ -49,8 +49,8 @@ def main():
                 payload=fixture.read_bytes()
                 page.set_input_files('#playlist-upload [name=video]',[{'name':'Erster Film.mp4','mimeType':'video/mp4','buffer':payload},{'name':'Defekte Datei.mp4','mimeType':'video/mp4','buffer':b'not-a-video'},{'name':'Zweiter Film.mp4','mimeType':'video/mp4','buffer':payload}])
                 page.click('#playlist-upload button')
-                page.wait_for_function("() => {const p=document.querySelector('[data-view=playlists] .upload-item progress');return p&&p.value>0&&p.value<100}",timeout=30000)
-                page.wait_for_function("() => {const row=document.querySelector('[data-view=playlists] .upload-item[data-state=processing]');const p=row?.querySelectorAll('progress')[1];return p&&p.value>0&&p.value<100}",timeout=60000)
+                page.wait_for_function("() => {const p=document.querySelector('[data-view=media] .upload-item progress');return p&&p.value>0&&p.value<100}",timeout=30000)
+                page.wait_for_function("() => {const row=document.querySelector('[data-view=media] .upload-item[data-state=processing]');const p=row?.querySelectorAll('progress')[1];return p&&p.value>0&&p.value<100}",timeout=60000)
                 if args.screenshots_dir:
                     args.screenshots_dir.mkdir(parents=True,exist_ok=True);page.evaluate('document.activeElement.blur();window.scrollTo(0,0)')
                     page.locator('#playlist-upload').locator('xpath=..').screenshot(path=str(args.screenshots_dir/'upload-progress.png'),style='#toast{visibility:hidden!important}')
@@ -58,8 +58,8 @@ def main():
                 page.click('.menu-link[href="#videos"]');page.locator('.upload-drawer>summary').click()
                 assert page.locator('[data-view=videos] .upload-item').count()==3
                 assert page.locator('#upload-form [name=video]').get_attribute('multiple') is not None
-                page.click('.menu-link[href="#playlists"]')
-                page.wait_for_function("() => document.querySelectorAll('[data-view=playlists] .upload-item[data-state=ready]').length===2&&document.querySelectorAll('[data-view=playlists] .upload-item[data-state=error]').length===1",timeout=180000)
+                page.click('.menu-link[href="#media"]')
+                page.wait_for_function("() => document.querySelectorAll('[data-view=media] .upload-item[data-state=ready]').length===2&&document.querySelectorAll('[data-view=media] .upload-item[data-state=error]').length===1",timeout=180000)
                 assert any(0<value<99 for value in changes),changes
                 converted=core.rows('SELECT * FROM videos WHERE user_id=? AND folder_id=? ORDER BY id',(uid,folder))
                 assert len(converted)==2
@@ -73,7 +73,7 @@ def main():
                 page.wait_for_selector('#playlist-videos .playlist-media-row',state='visible')
                 assert core.rows('SELECT name,path FROM videos WHERE id=?',(first['id'],))[0]=={'name':'Mein umbenannter Film.mp4','path':first['path']}
                 result=page.request.post(address+'/api/playlists',headers=headers,data={'name':'Upload-Auswahl','items':[video['id'] for video in converted],'folder_id':folder});assert result.status==200;playlist=result.json()['id']
-                page.goto(address+'/#playlists');page.wait_for_selector('#playlist-folder-tree');page.locator('#playlist-folder-tree').get_by_role('button',name='Upload-Ordner',exact=True).click()
+                page.goto(address+'/#media');page.wait_for_selector('#playlist-folder-tree');page.locator('#playlist-folder-tree').get_by_role('button',name='Upload-Ordner',exact=True).click()
                 row=page.locator('#playlist-videos .playlist-media-row').filter(has_text='Mein umbenannter Film.mp4')
                 page.once('dialog',lambda dialog:dialog.accept())
                 with page.expect_response(lambda response:response.request.method=='POST' and response.url.endswith('/api/videos/'+str(first['id'])+'/delete')) as deletion:
@@ -90,7 +90,7 @@ def main():
                 selected=core.rows('SELECT selected_video_id FROM users WHERE id=?',(uid,))[0]['selected_video_id']
                 selected_card=page.locator('[data-video-id="'+str(selected)+'"]');assert selected_card.get_by_role('button',name='Löschen',exact=True).is_disabled();assert 'Aktuelles Offline-Video' in selected_card.inner_text()
                 page.set_viewport_size({'width':390,'height':844})
-                for view in ('videos','playlists'):
+                for view in ('videos','media','playlists'):
                     page.goto(address+'/#'+view);page.wait_for_selector('[data-view="'+view+'"]:visible');assert page.evaluate('document.documentElement.scrollWidth<=innerWidth'),view
                 assert not errors,errors
                 browser.close();print('PASS: multi-file upload, measured network/conversion progress, queue across views, failed-file continuation, real H264/AAC conversion, rename in both libraries, confirmed reference-safe deletion, protected selected video and mobile layout.')

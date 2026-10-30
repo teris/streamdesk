@@ -6,11 +6,16 @@ import math
 from pathlib import Path
 import re
 import time
+import subprocess
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from flask import jsonify, request
 
-TABLES = ('playlist_folders', 'playlists', 'playlist_profiles', 'playlist_positions', 'playlist_output_state')
+class PlaylistStarting(Exception):
+    """A live encoder is still warming up; the controller must keep it alive."""
+
+
+TABLES = ('playlist_folders', 'playlists', 'playlist_profiles', 'playlist_positions', 'playlist_output_state', 'library_revisions')
 
 
 def migrate(c):
@@ -26,6 +31,14 @@ def migrate(c):
             db.execute('ALTER TABLE videos ADD COLUMN folder_id INTEGER')
         if 'playlist_scope' not in {row['name'] for row in db.execute('PRAGMA table_info(routing_programs)')}:
             db.execute("ALTER TABLE routing_programs ADD COLUMN playlist_scope TEXT NOT NULL DEFAULT ''")
+
+
+        for table,columns in (('videos','user_id,name,id'),('playlist_folders','user_id,parent_id,name'),('playlists','user_id,name,id')):
+            db.execute('CREATE INDEX IF NOT EXISTS library_'+table+'_owner ON '+table+'('+columns+')')
+        db.execute('CREATE TABLE IF NOT EXISTS library_revisions(user_id INTEGER PRIMARY KEY,revision INTEGER NOT NULL DEFAULT 0)')
+        for table in ('videos','playlist_folders','playlists'):
+            for event,reference in (('INSERT','NEW'),('UPDATE','NEW'),('DELETE','OLD')):
+                db.execute(f"CREATE TRIGGER IF NOT EXISTS library_{table}_{event.lower()} AFTER {event} ON {table} BEGIN INSERT INTO library_revisions(user_id,revision) VALUES ({reference}.user_id,1) ON CONFLICT(user_id) DO UPDATE SET revision=revision+1; END")
 
 
 def minute(value):
@@ -68,6 +81,7 @@ class PlaylistFeatures:
         self.offline_since = {}
         self.last_checkpoint = {}
         self.retry = {}
+        self.feeds = {}
         self.install_routes()
 
     def owned(self, table, user, ident):
@@ -126,7 +140,8 @@ class PlaylistFeatures:
 
     def assigned_ids(self,user):
         result=set()
-        for row in self.c.rows('SELECT playlist_id,schedules FROM playlist_profiles WHERE user_id=?',(user['id'],)):
+        result.update(row['playlist_id'] for row in self.c.rows('SELECT playlist_id FROM stream_plans WHERE user_id=?',(user['id'],)))
+        for row in self.c.rows("SELECT playlist_id,schedules FROM playlist_profiles WHERE user_id=? AND scope IN ('default','source:source2')",(user['id'],)):
             if row['playlist_id'] is not None:result.add(row['playlist_id'])
             result.update(rule['playlist_id'] for rule in json.loads(row['schedules']))
         return result
@@ -135,14 +150,18 @@ class PlaylistFeatures:
         playlists=self.c.rows('SELECT id,name,items FROM playlists WHERE user_id=?',(user['id'],))
         assigned=self.assigned_ids(user)
         active={ident for job in list(self.jobs.values()) if job['user_id']==user['id'] for ident in job['items']}
+        uses_by_video={};last_assigned=set()
+        for row in playlists:
+            ids=set(json.loads(row['items']))
+            if row['id'] in assigned and len(ids)==1:last_assigned.update(ids)
+            for ident in ids:uses_by_video.setdefault(ident,[]).append(row['name'])
         for video in videos:
-            uses=[row for row in playlists if video['id'] in json.loads(row['items'])]
             reason=''
             if video['id']==user['selected_video_id']:reason='Aktuelles Offline-Video: zuerst ein anderes Video auswählen.'
             elif video['id'] in active:reason='In einer laufenden Playlist: Wiedergabe zuerst pausieren.'
-            elif any(row['id'] in assigned and not any(ident!=video['id'] for ident in json.loads(row['items'])) for row in uses):reason='Letztes Video einer zugeordneten Playlist: zuerst die Ausspielregel anpassen.'
+            elif video['id'] in last_assigned:reason='Letztes Video einer zugeordneten Playlist: zuerst die Ausspielregel anpassen.'
             elif user['upload_state'] in ('queued','processing') and not user.get('upload_id'):reason='Videoverarbeitung läuft: bitte deren Abschluss abwarten.'
-            video.update(in_playlists=[row['name'] for row in uses],can_delete=not bool(reason),delete_reason=reason)
+            video.update(in_playlists=uses_by_video.get(video['id'],[]),can_delete=not bool(reason),delete_reason=reason)
         return videos
 
     def public(self, user):
@@ -233,7 +252,8 @@ class PlaylistFeatures:
                 row = self.owned('playlists', user, ident)
                 if request.method == 'DELETE':
                     if any(job['playlist_id'] == ident and job['user_id'] == user['id'] for job in self.jobs.values()):raise c.Error('Diese Playlist wird gerade gesendet.', http_status=409)
-                    for profile in c.rows('SELECT * FROM playlist_profiles WHERE user_id=?', (user['id'],)):
+                    if ident in self.assigned_ids(user):raise c.Error('Bitte die Playlist zuerst aus Ausspielregeln und dem Planer entfernen.',http_status=409)
+                    for profile in c.rows("SELECT * FROM playlist_profiles WHERE user_id=? AND scope IN ('default','source:source2')", (user['id'],)):
                         if profile['playlist_id'] == ident or any(rule['playlist_id'] == ident for rule in json.loads(profile['schedules'])):
                             raise c.Error('Bitte die Playlist zuerst aus Ausspielregeln und Zeitplänen entfernen.', http_status=409)
                     c.write('DELETE FROM playlists WHERE id=? AND user_id=?', (ident, user['id']))
@@ -241,10 +261,12 @@ class PlaylistFeatures:
                 else:
                     body = c.FEATURES.body();name, folder = self.name(body.get('name')), self.folder(user, body.get('folder_id'))
                     items = body.get('items', []);self.videos(user, items);self.unique('playlists', user, name, folder, ident)
-                    if not items and any(profile['playlist_id'] == ident or any(rule['playlist_id'] == ident for rule in json.loads(profile['schedules'])) for profile in c.rows('SELECT * FROM playlist_profiles WHERE user_id=?',(user['id'],))):
+                    if not items and ident in self.assigned_ids(user):
                         raise c.Error('Eine zugeordnete Playlist darf nicht leer gespeichert werden.', http_status=409)
                     c.write('UPDATE playlists SET name=?,folder_id=?,items=?,revision=revision+? WHERE id=? AND user_id=?',
                             (name, folder, json.dumps(items), int(items != json.loads(row['items'])), ident, user['id']))
+                    for job in self.jobs.values():
+                        if job['user_id']==user['id'] and job['playlist_id']==ident:job['name']=name
             return jsonify(ok=True)
 
         @c.app.post('/api/playlists/videos/<int:ident>/folder')
@@ -262,7 +284,7 @@ class PlaylistFeatures:
             try:folder = int(raw) if raw else None
             except ValueError:raise c.Error('Ungültiger Ordner.') from None
             self.folder(user, folder)
-            return c.accept_upload(user, max_duration=7200, folder_id=folder)
+            return c.accept_upload(user, folder_id=folder, kind='playlist')
 
         @c.app.get('/api/playout')
         @c.login_required
@@ -278,6 +300,8 @@ class PlaylistFeatures:
             body = c.FEATURES.body()
             with c.LOCK:
                 scope = self.scope(user, body.get('scope'))
+                if scope not in ('source:source2','default'):raise c.Error('Playlists werden gemeinsam über Source 2 geplant. Bitte Source 2 wählen.')
+                scope='source:source2'
                 enabled, auto = c.FEATURES.boolean(body, 'enabled'), c.FEATURES.boolean(body, 'auto_start')
                 delay = body.get('delay_seconds', 600)
                 if type(delay) is not int or not 0 <= delay <= 86400:raise c.Error('Verzögerung zwischen 0 und 1440 Minuten wählen.')
@@ -306,7 +330,9 @@ class PlaylistFeatures:
 
     def plan(self, user, program, stamp=None):
         if not self.c.SERVICES.enabled('playlists'):return None
-        scopes = [program.get('playlist_scope')] + ['source:'+key for key in program['sources'] if key != 'source1'] + ['default']
+        planned=self.c.STUDIO.plan(user,program,stamp) if hasattr(self.c,'STUDIO') else None
+        if planned:return planned
+        scopes = ['source:source2','default']
         for scope in filter(None, scopes):
             rows = self.c.rows('SELECT * FROM playlist_profiles WHERE user_id=? AND scope=? AND enabled=1', (user['id'], scope))
             if not rows:continue
@@ -324,6 +350,8 @@ class PlaylistFeatures:
 
     def decision(self, user, program, live, demand, now):
         key = (user['id'], program['id']);plan = self.plan(user, program)
+        shared_live=any(row.get('state')=='online' and row.get('key') in ('source1','source2') for row in self.c.ENGINE.snapshot.get(user['id'],{}).get('sources',[]))
+        live=live or shared_live
         if live or not demand and not (plan and plan['auto']):self.offline_since.pop(key, None)
         else:self.offline_since.setdefault(key, now)
         age = now - self.offline_since.get(key, now)
@@ -344,6 +372,8 @@ class PlaylistFeatures:
             state = rows[0] if rows else dict(mode='', window='', blocked='')
             configured = next((row for row in c.destinations(user) if row['kind'] == kind), None)
             selected = configured and configured['endpoint'] and (configured['selected'] or plan and plan['profile']['scope'].startswith('output:'))
+            if plan and plan.get('planner'):continue
+            if c.rows("SELECT 1 FROM planner_outputs WHERE user_id=? AND kind=? AND mode!=''",(user['id'],kind)):continue
             desired = plan and plan['auto'] and selected and c.SERVICES.output_allowed(kind)
             window = plan['window'] if plan else ''
             running = bool(config['paths'].get(c.output_path(user, kind), {}).get('forward'))
@@ -373,13 +403,17 @@ class PlaylistFeatures:
             self.c.write('''INSERT INTO playlist_output_state(user_id,kind,blocked) VALUES (?,?,?) ON CONFLICT(user_id,kind) DO UPDATE SET mode='',window='',blocked=excluded.blocked''',
                          (user['id'], target, plan['window'] if plan else ''))
 
-    def start(self, user, program, plan):
+    def prepare(self, user, program, plan):
         c = self.c;playlist = plan['playlist'];key = (user['id'], program['id'])
         videos = self.videos(user, json.loads(playlist['items']))
         if not videos:raise c.Error('Die Playlist enthält keine verfügbaren Videos.')
         total = sum(row['duration'] for row in videos)
         saved = c.rows('SELECT * FROM playlist_positions WHERE user_id=? AND program=? AND playlist_id=?', (user['id'], program['id'], playlist['id']))
         offset = saved[0]['offset'] % total if saved and saved[0]['revision'] == playlist['revision'] else 0
+        # Container/AAC rounding can leave a bookmark just after the last
+        # decodable frame. Seeking there makes concat loop without producing
+        # media. Continue at the next cycle instead of retrying that bookmark.
+        if total-offset < min(.25,total/2):offset=0
         folder = c.DATA / 'playout' / str(user['id']);folder.mkdir(parents=True, exist_ok=True, mode=0o700)
         manifest = folder / (program['id']+'.ffconcat');progress = folder / (program['id']+'.progress')
         def quote(value):return value.replace("'", "'\\''")
@@ -388,6 +422,53 @@ class PlaylistFeatures:
         self.jobs[key] = dict(user_id=user['id'], program=program['id'], playlist_id=playlist['id'], revision=playlist['revision'],
                               offset=offset, total=total, scheduled=plan['scheduled'], progress=progress, manifest=manifest, items=[row['id'] for row in videos], videos=videos, name=playlist['name'])
         return ['-re', '-stream_loop', '-1', '-f', 'concat', '-safe', '0', '-protocol_whitelist', 'file,pipe', '-ss', format(offset, '.6f'), '-i', str(manifest)], ['-progress', str(progress), '-stats_period', '0.25']
+
+    def start(self, user, program, plan):
+        c=self.c;uid=user['id'];key=(uid,program['id']);playlist=plan['playlist']
+        signature=(playlist['id'],playlist['revision'],user['replay_label'],user['replay_corner'])
+        feed=self.feeds.get(uid)
+        if feed and (feed['signature']!=signature or feed['process'].poll() is not None):
+            failed=feed['process'].poll() is not None
+            for client in list(feed['clients']):self.checkpoint(client,pause=True)
+            feed=None
+            if failed:raise c.Error('Playlist-Encoder wurde beendet. Der Start wird erneut versucht.')
+        if not feed:
+            pseudo=dict(program,id='source2-playlist')
+            inputs,progress=self.prepare(user,pseudo,plan)
+            shared_key=(uid,'source2-playlist');job=self.jobs.pop(shared_key)
+            path=user['prefix']+'playlist-source2'
+            command=['ffmpeg','-nostdin','-hide_banner','-loglevel','error']+progress+inputs+[
+                '-map','0:v:0','-map','0:a:0','-vf','scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,'+c.STUDIO.overlay(user),
+                '-c:v','libx264','-preset','veryfast','-tune','zerolatency','-profile:v','baseline','-pix_fmt','yuv420p','-bf','0','-g','30','-threads','2','-b:v','4500k','-maxrate','4500k','-bufsize','9000k',
+                '-c:a','aac','-b:a','160k','-ar','48000','-ac','2','-af','aresample=async=1:first_pts=0','-shortest','-max_interleave_delta','1000000','-flush_packets','1','-f','rtsp','-rtsp_transport','tcp','-pkt_size','1200',c.RTSP+path]
+            try:
+                with (c.DATA/('playlist-source2-'+str(uid)+'.log')).open('wb') as log:process=subprocess.Popen(command,stdout=subprocess.DEVNULL,stderr=log)
+            except Exception:
+                job['progress'].unlink(missing_ok=True);job['manifest'].unlink(missing_ok=True);raise
+            job['preparing']=True
+            feed=dict(signature=signature,process=process,job=job,clients=set(),path=path,started=time.monotonic())
+            self.feeds[uid]=feed
+        feed['clients'].add(key);self.jobs[key]=feed['job']
+        if feed['job'].get('preparing'):
+            job=feed['job'];ready=self.output_ready(job)
+            if ready:job['preparing']=False
+            elif feed['process'].poll() is not None:
+                for client in list(feed['clients']):self.checkpoint(client,pause=True)
+                raise c.Error('Playlist-Encoder wurde beendet. Der Start wird erneut versucht.')
+            elif time.monotonic()-feed['started']>=45:
+                for client in list(feed['clients']):self.checkpoint(client,pause=True)
+                raise c.Error('Die Playlist konnte innerhalb von 45 Sekunden kein Signal erzeugen. Encoder und Datei prüfen.')
+            else:raise PlaylistStarting()
+        return ['-rtsp_transport','tcp','-timeout','15000000','-analyzeduration','1000000','-probesize','1000000','-i',c.RTSP+feed['path']],[]
+
+    def output_ready(self,job):
+        try:
+            with job['progress'].open('rb') as stream:
+                stream.seek(max(0,stream.seek(0,2)-8192));data=stream.read().decode('utf8','replace')
+            frames=re.findall(r'^frame=(\d+)$',data,re.M)
+            times=re.findall(r'^out_time_us=(-?\d+)$',data,re.M)
+            return bool(frames and times and int(frames[-1])>=2 and int(times[-1])>0)
+        except OSError:return False
 
     def position(self, job):
         elapsed = 0
@@ -409,17 +490,28 @@ class PlaylistFeatures:
                          (job['user_id'], job['program'], job['playlist_id'], job['revision'], self.position(job)))
             self.last_checkpoint[key] = now
         if pause:
-            self.jobs.pop(key, None);job['progress'].unlink(missing_ok=True);job['manifest'].unlink(missing_ok=True)
+            self.jobs.pop(key, None)
+            feed=self.feeds.get(key[0])
+            if feed:
+                feed['clients'].discard(key)
+                if feed['clients']:return
+                process=feed['process']
+                if process.poll() is None:
+                    process.terminate()
+                    try:process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:process.kill();process.wait()
+                self.feeds.pop(key[0],None)
+            job['progress'].unlink(missing_ok=True);job['manifest'].unlink(missing_ok=True)
 
     def describe(self, key, plan, live):
         key = (key, 'main') if isinstance(key, int) else key
         job = self.jobs.get(key)
         if not job:
-            return dict(active=False, paused=bool(live and plan), name=plan['playlist']['name'] if plan else '', video='', offset=0)
+            return dict(active=False, preparing=False, paused=bool(live and plan), name=plan['playlist']['name'] if plan else '', video='', offset=0)
         offset = self.position(job);remaining = offset
         video = job['videos'][-1]
         for row in job['videos']:
             video = row
             if remaining < row['duration']:break
             remaining -= row['duration']
-        return dict(active=True, paused=False, name=job['name'], video=video['name'], offset=round(offset, 2), total=round(job['total'], 2), item_offset=round(remaining, 2))
+        return dict(active=not job.get('preparing',False), preparing=bool(job.get('preparing')), paused=False, name=job['name'], video=video['name'], source='source2', offset=round(offset, 2), total=round(job['total'], 2), item_offset=round(remaining, 2))

@@ -6,7 +6,7 @@
   const el=(tag,text,className)=>{const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(className)node.className=className;return node;};
   const button=(text,callback)=>{const node=el('button',text,'ghost');node.type='button';node.onclick=callback;return node;};
   const uid=()=>Array.from(crypto.getRandomValues(new Uint8Array(18)),value=>value.toString(16).padStart(2,'0')).join('');
-  const bytes=value=>value>=1048576?(value/1048576).toFixed(1)+' MB':Math.round(value/1024)+' KB';
+  const bytes=value=>value>=1073741824?(value/1073741824).toFixed(1)+' GB':value>=1048576?(value/1048576).toFixed(1)+' MB':Math.round(value/1024)+' KB';
   const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
   const terminal=row=>['ready','error','removed'].includes(row.state);
   const labels={waiting:'Wartet',uploading:'Wird hochgeladen',queued:'Wartet auf Umwandlung',checking:'Video wird geprüft',processing:'Wird umgewandelt',ready:'Fertig',error:'Fehlgeschlagen',removed:'Aus Warteschlange entfernt'};
@@ -54,7 +54,7 @@
   async function existing(row){try{return await get('/api/uploads/'+row.id);}catch(error){if(error.status===404)return null;throw error;}}
   function send(row){
     return new Promise((resolve,reject)=>{
-      const xhr=new XMLHttpRequest();xhr.open('POST',row.endpoint);xhr.setRequestHeader('X-CSRF-Token',token);xhr.responseType='json';xhr.timeout=1800000;
+      const xhr=new XMLHttpRequest();xhr.open('POST',row.endpoint);xhr.setRequestHeader('X-CSRF-Token',token);xhr.responseType='json';xhr.timeout=0;
       row.state='uploading';row.upload=0;row.sent=0;row.progress=0;row.message='';render();
       xhr.upload.onprogress=event=>{if(event.lengthComputable){row.upload=Math.min(100,event.loaded/event.total*100);row.sent=Math.min(row.size,row.size*event.loaded/event.total);render();}};
       xhr.onload=()=>{if(xhr.status>=200&&xhr.status<300&&xhr.response?.ok){row.upload=100;row.sent=row.size;row.state='queued';render();resolve(xhr.response);return;}const error=new Error(xhr.response?.error||(xhr.status===413?'Datei zu groß oder Upload-Limit im Reverse Proxy zu niedrig.':'Upload fehlgeschlagen (HTTP '+xhr.status+').'));error.status=xhr.status;error.busy=xhr.response?.code==='upload_busy';reject(error);};
@@ -93,7 +93,7 @@
   function enqueue(form){
     const files=[...form.querySelector('[name=video]').files],pending=jobs.filter(row=>!terminal(row)).length;
     if(!files.length)return;if(files.length+pending>50){notify('Maximal 50 Dateien gleichzeitig in der Warteschlange.',true);return;}
-    for(const file of files){let error='';if(!file.name.toLowerCase().endsWith('.mp4'))error='Bitte eine MP4-Datei auswählen.';else if(file.size>500*1024*1024)error='Maximal 500 MB pro Datei.';
+    for(const file of files){let error='';if(!file.name.toLowerCase().endsWith('.mp4'))error='Bitte eine MP4-Datei auswählen.';
       jobs.push({id:uid(),name:file.name,file,endpoint:form.dataset.uploadUrl||'/api/upload',folder:form.dataset.folderId?Number(form.dataset.folderId):null,folderLabel:form.dataset.folderLabel||'Offline-Videos',size:file.size,upload:0,sent:0,progress:0,state:error?'error':'waiting',message:error});}
     form.reset();render();pump();
   }
@@ -101,6 +101,16 @@
   window.addEventListener('DOMContentLoaded',async()=>{
     try{const data=await get('/api/uploads');for(const job of data.jobs.filter(row=>['queued','checking','processing'].includes(row.state)).reverse())if(!jobs.some(row=>row.id===job.id))jobs.unshift({...job,name:job.filename,upload:100,sent:job.size,file:null});}
     catch(error){if(error.status!==401)notify(error.message,true);}finally{restored=true;render();pump();}
+  });
+
+  let serverLookup=false;
+  window.addEventListener('streamdesk:status',event=>{
+    const upload=event.detail.upload;if(!upload?.job_id)return;
+    const row=jobs.find(item=>item.id===upload.job_id);
+    if(row&&upload.stage){const previous=row.state;apply(row,{state:upload.stage,progress:upload.progress,message:upload.message,video_id:upload.video_id});render();if(row.state==='ready'&&previous!=='ready')emit(row);return;}
+    if(row||serverLookup||!['queued','processing'].includes(upload.state))return;
+    serverLookup=true;
+    get('/api/uploads/'+upload.job_id).then(job=>{if(!jobs.some(item=>item.id===job.id)){jobs.unshift({...job,name:job.filename,upload:100,sent:job.size,file:null,folderLabel:job.kind==='ftp'?'FTP-Upload':'Server-Upload'});render();pump();}}).catch(()=>{}).finally(()=>serverLookup=false);
   });
 
   function mediaControls(video,changed){

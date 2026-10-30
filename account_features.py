@@ -56,13 +56,13 @@ def install_account_routes(c):
                       'routing_sources','output_routing','routing_programs','scenes','webauthn_credentials',
                       'recovery_codes','discord_auth','routing_policy','clips','automation_hooks','scheduled_jobs',
                       'export_targets','exported_media','notification_settings','webauthn_challenges',
-                      'playlist_folders','playlists','playlist_profiles','playlist_positions','playlist_output_state','video_uploads')
+                      'playlist_folders','playlists','playlist_profiles','playlist_positions','playlist_output_state','video_uploads','stream_plans','planner_outputs','twitch_plan_segments','ftp_accounts','ftp_imports','ftp_library_views','library_revisions')
             snapshot = {table:c.rows('SELECT * FROM '+table+' WHERE user_id=?',(uid,)) for table in tables}
             archive = c.DATA/'deleted-users'/(str(uid)+'-'+str(int(time.time()))+'-'+secrets.token_hex(4))
             archive.mkdir(parents=True,mode=0o700)
             moved = []
             try:
-                for folder in (c.DATA/'media'/target['username'],c.DATA/'recordings'/target['username'],c.DATA/'clips'/target['username'],c.DATA/'playout'/str(uid),
+                for folder in (c.DATA/'media'/target['username'],c.DATA/'recordings'/target['username'],c.DATA/'clips'/target['username'],c.DATA/'playout'/str(uid),c.DATA/'ftp'/str(uid),
                                c.FEATURES.native_root/target['username']):
                     if folder.is_symlink():
                         raise c.Error('Ein Benutzerverzeichnis ist ein symbolischer Link; Löschung abgebrochen.')
@@ -70,6 +70,12 @@ def install_account_routes(c):
                         destination = folder.with_name('.deleted-'+folder.name+'-'+str(uid)+'-'+secrets.token_hex(4))
                         folder.rename(destination)
                         moved.append((folder,destination))
+                for imported in snapshot['ftp_imports']:
+                    if imported['staging']:
+                        try:source=c.FTP.source(imported)
+                        except c.Error:continue
+                        destination=archive/('ftp-source-'+secrets.token_hex(12)+'.mp4')
+                        source.rename(destination);moved.append((source,destination))
                 c.atomic(archive/'manifest.json',json.dumps({'user':target,'tables':snapshot,'paths':owned,
                          'media':[{'original':str(a),'archive':str(b)} for a,b in moved]},ensure_ascii=False))
                 with c.db() as connection:
