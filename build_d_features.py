@@ -343,7 +343,7 @@ class BuildDFeatures:
         def passkey_login():
             body = self.body()
             pending, client_hash = self.verify_client(str(body.get('client_data', '')), 'login')
-            found = c.rows('''SELECT w.*,u.active,u.version FROM webauthn_credentials w
+            found = c.rows('''SELECT w.*,u.active,u.version,u.expert_preference FROM webauthn_credentials w
                               JOIN users u ON u.id=w.user_id WHERE w.credential_id=?''',
                            (str(body.get('credential_id', '')),))
             if not found or found[0]['user_id'] != pending.get('user_id') or not found[0]['active']:
@@ -379,7 +379,7 @@ class BuildDFeatures:
                 if cursor.rowcount != 1:
                     raise c.Error('Die Passkey-Anfrage wurde bereits verwendet.', http_status=401)
             session.clear()
-            session.update(uid=credential['user_id'], version=credential['version'], csrf=secrets.token_urlsafe(32))
+            session.update(uid=credential['user_id'], version=credential['version'], csrf=secrets.token_urlsafe(32),expert_mode=bool(credential['expert_preference']))
             return jsonify(ok=True)
 
         @c.app.post('/api/recovery/login')
@@ -390,7 +390,7 @@ class BuildDFeatures:
             if c.login_limited(username):
                 raise c.Error('Zu viele Anmeldeversuche. Bitte in fünf Minuten erneut versuchen.', http_status=429)
             c.login_failure(username)
-            found = c.rows('SELECT id,version FROM users WHERE username=? AND active=1', (username,))
+            found = c.rows('SELECT id,version,expert_preference FROM users WHERE username=? AND active=1', (username,))
             if not found:
                 raise c.Error('Recovery-Code ungültig.', http_status=401)
             digest = self.recovery_hash(found[0]['id'], code)
@@ -401,7 +401,7 @@ class BuildDFeatures:
             if not used:
                 raise c.Error('Recovery-Code ungültig oder bereits verwendet.', http_status=401)
             session.clear()
-            session.update(uid=found[0]['id'], version=found[0]['version'], csrf=secrets.token_urlsafe(32))
+            session.update(uid=found[0]['id'], version=found[0]['version'], csrf=secrets.token_urlsafe(32),expert_mode=bool(found[0]['expert_preference']))
             return jsonify(ok=True)
 
     def recovery_hash(self, uid, code):

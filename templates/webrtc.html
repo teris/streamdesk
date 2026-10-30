@@ -12,6 +12,7 @@
         <p>{{'Programm' if slot == 3 else source if source else 'Source ' ~ slot}} · Expertenmodus</p>
         <video id="rtc-video" controls autoplay muted playsinline></video>
         <div class="rtc-controls"><button id="rtc-start" class="primary" {% if not enabled %}disabled{% endif %}>{{'Kamera und Mikrofon starten' if mode == 'publish' else 'Vorschau starten'}}</button><button id="rtc-stop" class="danger" disabled>Verbindung beenden</button></div>
+        {% if mode=='play' %}<div class="rtc-controls" aria-label="Vorschauton"><button id="rtc-audio-toggle" class="secondary" type="button" aria-pressed="false" disabled>Ton einschalten</button><label>Lautstärke <input id="rtc-volume" type="range" min="0" max="100" step="1" value="70" disabled></label></div>{% endif %}
         <p id="rtc-status" role="status">{% if not enabled %}WebRTC ist noch nicht aktiviert. {{'Aktiviere den Server unter Expertenmodus → Protokolle & WebRTC und lade diese Seite anschließend neu.' if admin else 'Bitte einen Administrator, den Server unter Expertenmodus → Protokolle & WebRTC zu aktivieren.'}}{% else %}Bereit. {{'Kamera und Mikrofon werden erst nach deinem Klick freigegeben.' if mode == 'publish' else 'Bei inkompatiblen Codecs die HLS-Vorschau in StreamDesk verwenden.'}}{% endif %}</p>
         {% if not enabled %}<p><a class="secondary" href="/#expert-protocols">Zur WebRTC-Einrichtung</a></p>{% endif %}
         <p class="small muted">Die Medienverbindung benötigt einen erreichbaren WebRTC-Port am Server. Beim Schließen dieser Seite wird die Verbindung beendet.</p>

@@ -20,13 +20,13 @@ def outside_namespace(namespace):
     return '~^(?:' + '|'.join(alternatives) + ')$'
 
 
-def service_acl(namespace, local_ips=('127.0.0.1', '::1')):
+def service_acl(namespace, local_ips=('127.0.0.1', '::1'), owned_paths=()):
     return {'user': 'any', 'pass': '', 'ips': list(local_ips), 'permissions': [
         {'action': 'api', 'path': ''},
         {'action': 'metrics', 'path': ''},
         {'action': 'publish', 'path': '~^' + re.escape(namespace) + '/'},
         {'action': 'read', 'path': '~^' + re.escape(namespace) + '/'},
-    ]}
+    ] + [{'action':action,'path':path} for path in sorted(set(owned_paths)) for action in ('publish','read') if path]}
 
 
 def is_service_acl(entry, namespace):
@@ -39,15 +39,16 @@ def is_service_acl(entry, namespace):
         ('read', '~^' + re.escape(namespace) + '/'),
     }
     actual = {(p.get('action'), p.get('path') or '') for p in entry.get('permissions') or []}
-    return actual in (expected, expected | {('metrics', '')})
+    extra=actual-(expected | {('metrics','')})
+    return expected<=actual and all(action in ('publish','read') and path and not path.startswith('~') for action,path in extra)
 
 
-def merge_auth(config, namespace, managed_users, local_ips=('127.0.0.1', '::1')):
+def merge_auth(config, namespace, managed_users, local_ips=('127.0.0.1', '::1'), owned_paths=()):
     if config.get('authMethod', 'internal') != 'internal':
         raise ValueError('Diese Version benötigt interne MediaMTX-Authentifizierung. HTTP/JWT wird nicht automatisch ersetzt.')
     outside = outside_namespace(namespace)
     own_prefix = 'streamdesk_' + namespace + '_'
-    service = service_acl(namespace, local_ips)
+    service = service_acl(namespace, local_ips, owned_paths)
     inherited = []
     existing = (config.get('authInternalUsers') or []) if 'authInternalUsers' in config else default_internal_users()
     for original in existing:
@@ -101,16 +102,17 @@ def list_items(call, endpoint):
             raise ValueError('Ungültige Seitenzahl der MediaMTX-API.')
 
 
-def synchronize_runtime(call, config, namespace, obsolete_paths=()):
+def synchronize_runtime(call, config, namespace, obsolete_paths=(), owned_paths=()):
     """Apply only managed changes; fast consecutive atomic file writes can coalesce."""
     from urllib.parse import quote
+    explicit=set(owned_paths)
     current = call('config/global/get')
     users = config.get('authInternalUsers', [])
     if not contains_settings(current.get('authInternalUsers'), users):
         call('config/global/patch', {'authInternalUsers': users}, method='PATCH')
     existing = {item['name']: item for item in list_items(call,'config/paths/list')}
     for name in obsolete_paths:
-        if not name.startswith(namespace + '/') or name in config.get('paths', {}) or name not in existing:
+        if not (name.startswith(namespace + '/') or name in explicit) or name in config.get('paths', {}) or name not in existing:
             continue
         try:
             call('config/paths/delete/' + quote(name, safe='/'), method='DELETE')
@@ -118,7 +120,7 @@ def synchronize_runtime(call, config, namespace, obsolete_paths=()):
             if getattr(error, 'status', None) != 404:
                 raise
     for name, settings in config.get('paths', {}).items():
-        if not name.startswith(namespace + '/'):
+        if not (name.startswith(namespace + '/') or name in explicit):
             continue
         path = quote(name, safe='/')
         if name not in existing:

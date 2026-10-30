@@ -34,6 +34,7 @@ with patch.object(app.threading, 'Thread'):
 def tearDownModule():
     COOKIE_CLOCK.stop()
     tempfile.tempdir = old_temp
+    for directory,dirs,files in os.walk(BASE/'data'/'ftp'):Path(directory).chmod(0o700)
     TEMP.cleanup()
 
 
@@ -155,7 +156,7 @@ class MediaFeatureTests(unittest.TestCase):
             token = session['csrf']
         response = self.client.post('/login', data={'csrf':token,'username':'alice','password':'Fixture-Only-Password-12345'})
         self.assertEqual(response.status_code, 302)
-        self.assertFalse(self.client.get('/api/expert-mode').json['expert_mode'])
+        self.assertTrue(self.client.get('/api/expert-mode').json['expert_mode'])
 
     def test_theme_and_media_library_work_without_expert_mode(self):
         response = self.client.post('/api/preferences', json={'theme':'light'}, headers=self.headers)
@@ -650,6 +651,16 @@ class ExpansionTests(unittest.TestCase):
         self.assertFalse(config['paths'][live]['alwaysAvailable'])
         self.assertFalse(config['paths'][self.user['prefix']+'webrtc-program']['alwaysAvailable'])
 
+    def test_legacy_runtime_scope_uses_exact_database_owned_paths(self):
+        previous=self.user['prefix']
+        try:
+            app.write("UPDATE users SET prefix='' WHERE id=?",(UID,))
+            owned=app.owned_legacy_paths()
+            self.assertTrue({'source1','source2','live','playlist-source2','webrtc-program','output'}<=owned)
+            self.assertNotIn('camera',owned);self.assertNotIn('',owned)
+            with patch('media_config.synchronize_runtime') as sync:app.sync_media_runtime()
+            self.assertEqual(sync.call_args.kwargs['owned_paths'],owned)
+        finally:app.write('UPDATE users SET prefix=? WHERE id=?',(previous,UID))
     def test_program_hls_proxy_uses_personal_credentials(self):
         class Upstream(io.BytesIO):
             headers=Message()
@@ -682,6 +693,25 @@ class ExpansionTests(unittest.TestCase):
             manager.close()
             second.terminate.assert_called_once()
 
+    def test_program_webrtc_waiting_for_connection_is_not_reaped_as_idle(self):
+        from unittest.mock import Mock
+        from program_preview import ProgramPreview
+        manager=ProgramPreview(app);process=Mock();process.poll.return_value=None
+        with patch('program_preview.subprocess.Popen',return_value=process),patch.object(app,'mtx',return_value={'online':True,'tracks':['H264','Opus']}):
+            self.assertEqual(manager.ensure(self.user),manager.path(self.user))
+            job=manager.jobs[UID];job['used']=app.time.monotonic()-25
+            manager.monitor([self.user],{})
+            process.terminate.assert_not_called();self.assertIn(UID,manager.jobs)
+            job['pending_until']=app.time.monotonic()-1
+            manager.monitor([self.user],{})
+            process.terminate.assert_called_once();self.assertNotIn(UID,manager.jobs)
+    def test_program_webrtc_rejects_partial_signal_and_cleans_failed_process(self):
+        from unittest.mock import Mock
+        from program_preview import ProgramPreview
+        manager=ProgramPreview(app);process=Mock();process.poll.return_value=None
+        with patch('program_preview.subprocess.Popen',return_value=process),patch.object(app,'mtx',return_value={'online':True,'tracks':['H264']}),patch('program_preview.time.monotonic',side_effect=[0,0,0,0,11]):
+            with self.assertRaises(app.Error):manager.ensure(self.user)
+        self.assertNotIn(UID,manager.jobs);process.terminate.assert_called_once()
     def test_program_webrtc_offer_uses_only_owned_browser_compatible_path(self):
         config=yaml.safe_load(app.CONFIG.read_text());config['webrtc']=True;app.CONFIG.write_text(yaml.safe_dump(config))
         path=self.user['prefix']+'webrtc-program'
@@ -814,12 +844,16 @@ class ExpansionTests(unittest.TestCase):
             app.write("UPDATE users SET upload_state='processing' WHERE id=?",(target,))
             self.assertEqual(self.post('/api/admin/users/'+str(target)+'/delete',{'confirm':'retireduser'}).status_code,409)
             app.write("UPDATE users SET upload_state='' WHERE id=?",(target,))
+            retained=app.DATA/'uploads'/('ftp-'+'b'*32+'.mp4');retained.parent.mkdir(exist_ok=True);retained.write_bytes(b'retained-ftp-source')
+            app.write("INSERT INTO ftp_imports(id,user_id,path,size,state,staging,created) VALUES (?,?,?,19,'error',?,0)",('archive-retained-fixture',target,str(app.DATA/'ftp'/str(target)/'Retained.mp4'),str(retained)))
             with patch.object(app,'mtx',return_value={}):
                 response=self.post('/api/admin/users/'+str(target)+'/delete',{'confirm':'retireduser'})
             self.assertEqual(response.status_code,200,response.json)
             self.assertFalse(app.rows('SELECT * FROM users WHERE id=?',(target,)))
             self.assertFalse(any(name.startswith('unittest/retireduser/') for name in yaml.safe_load(app.CONFIG.read_text())['paths']))
-            self.assertTrue(list((app.DATA/'deleted-users').glob(str(target)+'-*/manifest.json')))
+            manifest=next((app.DATA/'deleted-users').glob(str(target)+'-*/manifest.json'))
+            self.assertFalse(retained.exists())
+            archived=next(manifest.parent.glob('ftp-source-*.mp4'));self.assertEqual(archived.read_bytes(),b'retained-ftp-source')
             with patch.object(app.threading,'Thread'):replacement=app.add_user('retireduser','New-Fixture-Password-456')
             self.assertGreater(replacement,target)
         finally:
@@ -1587,6 +1621,7 @@ class PlaylistTests(unittest.TestCase):
             app.write('DELETE FROM '+table+' WHERE user_id=?',(self.uid,))
         app.write('UPDATE videos SET folder_id=NULL WHERE user_id=?',(self.uid,))
         app.write("UPDATE users SET output='',output_kind='twitch' WHERE id=?",(self.uid,))
+        app.FTP.library_versions.pop(self.uid,None)
         app.CONFIG.write_text(self.config);app.write("DELETE FROM settings WHERE name='service_policy'")
         for row in self.flags:app.write('INSERT INTO settings(name,value) VALUES (?,?)',(row['name'],row['value']))
         app.PLAYLISTS.offline_since={key:value for key,value in app.PLAYLISTS.offline_since.items() if key[0]!=self.uid}
@@ -1645,23 +1680,23 @@ class PlaylistTests(unittest.TestCase):
         _,eligible=app.PLAYLISTS.decision(self.user,program,True,True,1601);self.assertFalse(eligible)
         _,eligible=app.PLAYLISTS.decision(self.user,program,False,True,1602);self.assertFalse(eligible)
 
-    def test_own_output_rules_split_shared_program_and_keep_identity_on_edit(self):
+    def test_common_source2_rule_keeps_output_program_identity(self):
         a=self.playlist();b=self.playlist('Playlist B')
         before=app.MODEL.output_program(self.user,'twitch')['id'];self.assertEqual(before,'main')
-        self.post('/api/playout',self.profile(scope='output:twitch',playlist_id=a))
-        self.post('/api/playout',self.profile(scope='output:youtube',playlist_id=b))
+        self.post('/api/playout',self.profile(scope='output:twitch',playlist_id=a),400)
+        self.post('/api/playout',self.profile(scope='source:source2',playlist_id=a))
         twitch=app.MODEL.output_program(self.user,'twitch');youtube=app.MODEL.output_program(self.user,'youtube')
-        self.assertNotEqual(twitch['id'],youtube['id']);self.assertNotEqual(twitch['id'],'main')
+        self.assertEqual(twitch['id'],youtube['id'])
         self.assertEqual(app.PLAYLISTS.plan(self.user,twitch)['playlist']['id'],a)
-        self.assertEqual(app.PLAYLISTS.plan(self.user,youtube)['playlist']['id'],b)
-        self.post('/api/playout',self.profile(scope='output:twitch',playlist_id=b,delay_seconds=0))
-        self.assertEqual(app.MODEL.output_program(self.user,'twitch')['id'],twitch['id'])
+        self.assertEqual(app.PLAYLISTS.plan(self.user,youtube)['playlist']['id'],a)
+        self.post('/api/playout',self.profile(scope='source:source2',playlist_id=b,delay_seconds=0))
+        self.assertEqual(app.MODEL.output_program(self.user,'twitch')['id'],before)
 
     def test_source2_and_extra_source_profiles_keep_fixed_sources(self):
         ident=self.playlist();self.post('/api/playout',self.profile(scope='source:source1',playlist_id=ident),400)
         self.post('/api/playout',self.profile(scope='source:source2',playlist_id=ident))
         source=self.post('/api/routing/sources',{'label':'Camera 3','protocol':'rtmp'})['key']
-        self.post('/api/playout',self.profile(scope='source:'+source,playlist_id=ident))
+        self.post('/api/playout',self.profile(scope='source:'+source,playlist_id=ident),400)
         self.assertEqual([row['key'] for row in app.MODEL.sources(self.user)[:2]],['source1','source2'])
         self.assertEqual(app.PLAYLISTS.plan(self.user,app.MODEL.program(self.user))['profile']['scope'],'source:source2')
 
@@ -1689,7 +1724,7 @@ class PlaylistTests(unittest.TestCase):
         from datetime import datetime
         from zoneinfo import ZoneInfo
         ident=self.playlist();self.post('/api/playout',self.profile(playlist_id=ident))
-        self.post('/api/playout',self.profile(scope='output:twitch',schedules=[dict(playlist_id=ident,start='00:00',end='00:00',days=list(range(7)))],delay_seconds=600))
+        self.post('/api/playout',self.profile(scope='source:source2',schedules=[dict(playlist_id=ident,start='00:00',end='00:00',days=list(range(7)))],delay_seconds=600))
         plan,eligible=app.PLAYLISTS.decision(self.user,app.MODEL.output_program(self.user,'twitch'),False,True,500)
         self.assertTrue(eligible);self.assertTrue(plan['scheduled'])
 
@@ -1705,16 +1740,16 @@ class PlaylistTests(unittest.TestCase):
     def test_progress_position_survives_live_pause_and_restart(self):
         ident=self.playlist(items=[self.video,self.video]);self.post('/api/playout',self.profile(playlist_id=ident,delay_seconds=0))
         program=app.MODEL.program(self.user);plan=app.PLAYLISTS.plan(self.user,program)
-        args,_=app.PLAYLISTS.start(self.user,program,plan)
+        args,_=app.PLAYLISTS.prepare(self.user,program,plan)
         key=(self.uid,'main');job=app.PLAYLISTS.jobs[key];job['progress'].write_text('out_time_us=4200000\n')
         app.PLAYLISTS.checkpoint(self.uid,pause=True)
         self.assertAlmostEqual(app.rows('SELECT offset FROM playlist_positions WHERE user_id=?',(self.uid,))[0]['offset'],4.2)
-        app.PLAYLISTS.start(self.user,program,plan)
+        app.PLAYLISTS.prepare(self.user,program,plan)
         self.assertAlmostEqual(app.PLAYLISTS.jobs[key]['offset'],4.2)
         self.assertIn('-stream_loop',args)
         app.PLAYLISTS.checkpoint(key,pause=True)
         self.post('/api/playlists/'+str(ident),{'name':'Updated','items':[self.video]})
-        plan=app.PLAYLISTS.plan(self.user,program);app.PLAYLISTS.start(self.user,program,plan)
+        plan=app.PLAYLISTS.plan(self.user,program);app.PLAYLISTS.prepare(self.user,program,plan)
         self.assertEqual(app.PLAYLISTS.jobs[key]['offset'],0)
 
     def test_service_switch_and_automation_pause_preserve_library(self):
@@ -1727,7 +1762,7 @@ class PlaylistTests(unittest.TestCase):
         self.assertTrue(app.rows('SELECT id FROM playlists WHERE id=?',(ident,)))
 
     def test_automatic_start_respects_manual_stop_and_leaves_manual_output_running(self):
-        ident=self.playlist();self.post('/api/playout',self.profile(scope='output:twitch',playlist_id=ident,delay_seconds=0,auto_start=True))
+        ident=self.playlist();self.post('/api/playout',self.profile(scope='source:source2',playlist_id=ident,delay_seconds=0,auto_start=True))
         app.write('INSERT INTO outputs(user_id,kind,endpoint,selected) VALUES (?,?,?,1)',(self.uid,'twitch',app.encrypt('rtmps://fixture.invalid/live#key')))
         program=app.MODEL.output_program(self.user,'twitch');plan=app.PLAYLISTS.plan(self.user,program)
         app.PLAYLISTS.manual_control(self.user,'twitch')
@@ -1740,12 +1775,12 @@ class PlaylistTests(unittest.TestCase):
             app.PLAYLISTS.automatic(self.user,program,None,False,config,2001)
             forward.assert_not_called()
 
-    def test_upload_uses_playlist_duration_limit_and_owned_folder(self):
+    def test_upload_preserves_playlist_folder_without_duration_limit(self):
         folder=self.post('/api/playlist-folders',{'name':'Uploads'})['id']
         with patch.object(app.JOBS,'submit') as submit:
             response=self.client.post('/api/playlists/upload',data={'folder_id':str(folder),'video':(io.BytesIO(b'fixture'),'clip.mp4')},headers=self.headers)
             self.assertEqual(response.status_code,200,response.json)
-            self.assertEqual(submit.call_args.args[-2:],(7200,folder))
+            self.assertEqual(submit.call_args.args[-1],folder)
             Path(submit.call_args.args[2]).unlink(missing_ok=True)
         app.UPLOAD_RESERVATIONS.pop(self.uid,None)
         app.write("UPDATE users SET upload_state='ready',upload_message='' WHERE id=?",(self.uid,))
@@ -1758,7 +1793,7 @@ class PlaylistTests(unittest.TestCase):
     def test_global_playlist_disable_stops_encoder_and_saves_position(self):
         ident=self.playlist();self.post('/api/playout',self.profile(playlist_id=ident,delay_seconds=0))
         program=app.MODEL.program(self.user);plan=app.PLAYLISTS.plan(self.user,program)
-        app.PLAYLISTS.start(self.user,program,plan)
+        app.PLAYLISTS.prepare(self.user,program,plan)
         app.PLAYLISTS.jobs[(self.uid,'main')]['progress'].write_text('out_time_us=1500000\n')
         flags=app.SERVICES.flags();flags['playlists']=False;app.set_setting('service_policy',self.json.dumps(flags))
         app.SERVICES.enforce_local()
@@ -1837,6 +1872,55 @@ class UploadManagementTests(unittest.TestCase):
         self.assertEqual(app.rows('SELECT offset FROM playlist_positions WHERE user_id=?',(self.uid,))[0]['offset'],1.2)
         self.assertEqual(app.PLAYLISTS.jobs[(self.uid,'main')]['videos'][0]['name'],'Neuer Name.mp4')
 
+    def test_six_gib_web_upload_is_promoted_without_copying(self):
+        from werkzeug.datastructures import FileStorage,MultiDict
+        stage=app.StagedVideoUpload(app);stage.truncate(6*1024**3);inode=stage.fileno();inode=os.fstat(inode).st_ino
+        target=None
+        try:
+            with app.app.test_request_context('/api/upload',method='POST'):
+                app.request.__dict__['files']=MultiDict({'video':FileStorage(stream=stage,filename='Large.mp4')})
+                app.request.__dict__['form']=MultiDict({'upload_id':'large-upload-fixture-12345'})
+                with patch.object(app.JOBS,'submit') as submit,patch.object(FileStorage,'save',side_effect=AssertionError('Unnecessary full-file copy')):
+                    response=app.accept_upload(self.user)
+                self.assertTrue(response.json['ok']);target=Path(submit.call_args.args[2])
+                self.assertEqual(target.stat().st_size,6*1024**3);self.assertEqual(target.stat().st_ino,inode)
+            self.assertTrue(target.exists())
+            self.assertEqual(app.rows('SELECT size FROM video_uploads WHERE id=?',('large-upload-fixture-12345',))[0]['size'],6*1024**3)
+        finally:
+            stage.close()
+            if target:target.unlink(missing_ok=True)
+
+    def test_video_request_bypasses_body_cap_but_other_routes_keep_it(self):
+        with patch.dict(app.app.config,MAX_CONTENT_LENGTH=16),patch.object(app.JOBS,'submit') as submit:
+            response=self.client.post('/api/upload',data={'video':(io.BytesIO(b'fixture'*100),'Large.mp4')},headers=self.headers)
+            self.assertEqual(response.status_code,200,response.json);Path(submit.call_args.args[2]).unlink()
+            response=self.client.post('/api/videos/'+str(self.vid)+'/rename',json={'name':'x'*100},headers=self.headers)
+            self.assertEqual(response.status_code,413)
+
+    def test_web_upload_refuses_low_disk_before_spooling(self):
+        before=set((app.DATA/'uploads').glob('.web-stage-*'))
+        with patch.object(app.shutil,'disk_usage',return_value=SimpleNamespace(free=100)),patch.object(app.JOBS,'submit') as submit:
+            response=self.client.post('/api/upload',data={'video':(io.BytesIO(b'fixture'),'Clip.mp4')},headers=self.headers)
+            self.assertEqual(response.status_code,507,response.json);submit.assert_not_called()
+        self.assertEqual(set((app.DATA/'uploads').glob('.web-stage-*')),before)
+
+    def test_partial_web_upload_is_cleaned_if_disk_fills_while_receiving(self):
+        before=set((app.DATA/'uploads').glob('.web-stage-*'));calls=0
+        def space(_):
+            nonlocal calls
+            calls+=1;return SimpleNamespace(free=10*1024**3 if calls==1 else 100)
+        with patch.object(app.shutil,'disk_usage',side_effect=space),patch.object(app.JOBS,'submit') as submit:
+            response=self.client.post('/api/upload',data={'video':(io.BytesIO(b'fixture'*1000),'Clip.mp4')},headers=self.headers)
+            self.assertEqual(response.status_code,507,response.json);submit.assert_not_called()
+        self.assertEqual(set((app.DATA/'uploads').glob('.web-stage-*')),before)
+
+    def test_conversion_monitor_stops_before_filling_disk_without_total_deadline(self):
+        ident=self.job();started=app.time.monotonic()
+        with patch.object(app.shutil,'disk_usage',return_value=SimpleNamespace(free=100)):
+            with self.assertRaisesRegex(app.Error,'Speicher'):
+                app.UPLOADS.encode([sys.executable,'-c',"print('out_time_us=100000',flush=True);import time;time.sleep(8)"],self.uid,ident,5)
+        self.assertLess(app.time.monotonic()-started,5)
+
     def test_rename_rejects_foreign_invalid_names_and_missing_csrf(self):
         foreign=app.rows('SELECT id FROM videos WHERE user_id=?',(self.other,))[0]['id']
         self.assertEqual(self.client.post('/api/videos/'+str(foreign)+'/rename',json={'name':'No'},headers=self.headers).status_code,404)
@@ -1894,9 +1978,414 @@ class UploadManagementTests(unittest.TestCase):
         self.assertEqual(job['state'],'error');self.assertEqual(job['progress'],55)
         self.assertIn('Serverneustart',job['message'])
 
+    def test_restart_preserves_ftp_originals_and_cleans_incomplete_web_spools(self):
+        ident=self.job();app.write("UPDATE video_uploads SET kind='ftp' WHERE id=?",(ident,))
+        folder=app.DATA/'uploads';folder.mkdir(exist_ok=True)
+        partial=folder/'.web-stage-interrupted';partial.write_bytes(b'partial')
+        retained=folder/('ftp-'+'c'*32+'.mp4');retained.write_bytes(b'original')
+        try:
+            app.UPLOADS.recover()
+            self.assertFalse(partial.exists());self.assertTrue(retained.exists())
+            self.assertIn('FTP-Importe',app.UPLOADS.get(self.user,ident)['message'])
+        finally:retained.unlink(missing_ok=True)
+
     def test_video_metadata_endpoint_is_private_and_has_no_storage_paths(self):
         response=self.client.get('/api/videos/'+str(self.vid))
         self.assertEqual(response.status_code,200);self.assertTrue(response.json['can_delete'])
         self.assertNotIn('path',response.json);self.assertNotIn('user_id',response.json)
         foreign=app.rows('SELECT id FROM videos WHERE user_id=?',(self.other,))[0]['id']
         self.assertEqual(self.client.get('/api/videos/'+str(foreign)).status_code,404)
+
+
+class StudioV2Tests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        with patch.object(app.threading,'Thread'):
+            cls.uid=app.add_user('studio_v2','Studio-V2-Fixture-Password-123')
+            cls.other=app.add_user('studio_v2_other','Studio-V2-Fixture-Password-456')
+            cls.admin=app.add_user('studio_v2_admin','Studio-V2-Fixture-Admin-123',admin=True)
+        app.write('UPDATE videos SET duration=20 WHERE user_id IN (?,?)',(cls.uid,cls.other))
+    def setUp(self):
+        import json
+        self.json=json;self.config=app.CONFIG.read_text();self.flags=app.rows("SELECT * FROM settings WHERE name='service_policy'")
+        app.write("DELETE FROM settings WHERE name='service_policy'")
+        self.user=app.rows('SELECT * FROM users WHERE id=?',(self.uid,))[0]
+        self.video=app.rows('SELECT id FROM videos WHERE user_id=?',(self.uid,))[0]['id']
+        self.headers={'X-CSRF-Token':'studio-v2'};self.client=app.app.test_client();self.admin_client=app.app.test_client()
+        for client,uid in ((self.client,self.uid),(self.admin_client,self.admin)):
+            with client.session_transaction() as session:session.update(uid=uid,version=1,csrf='studio-v2',expert_mode=False)
+        self.playlist=app.write('INSERT INTO playlists(user_id,name,items) VALUES (?,?,?)',(self.uid,'Playlist V2',self.json.dumps([self.video])))
+        self.second=app.write('INSERT INTO playlists(user_id,name,items) VALUES (?,?,?)',(self.uid,'Playlist B',self.json.dumps([self.video])))
+        for kind in ('twitch','youtube'):app.write('INSERT INTO outputs(user_id,kind,endpoint,selected) VALUES (?,?,?,1)',(self.uid,kind,app.encrypt('rtmps://fixture.invalid/'+kind)))
+    def tearDown(self):
+        for key in list(app.PLAYLISTS.jobs):
+            if key[0]==self.uid:app.PLAYLISTS.checkpoint(key,pause=True)
+        for table in ('stream_plans','planner_outputs','twitch_plan_segments','ftp_imports','ftp_accounts','ftp_library_views','playlist_positions','playlist_output_state','playlist_profiles','playlists','outputs','playlist_folders'):
+            app.write('DELETE FROM '+table+' WHERE user_id=?',(self.uid,))
+        app.FTP.library_versions.pop(self.uid,None)
+        app.CONFIG.write_text(self.config);app.write("DELETE FROM settings WHERE name='service_policy'")
+        for row in self.flags:app.write('INSERT INTO settings(name,value) VALUES (?,?)',(row['name'],row['value']))
+        app.write('UPDATE users SET expert_preference=0,switch_text=\'Synchronisation\',replay_label=\'Wiederholung\',replay_corner=\'top-left\',upload_state=\'ready\',upload_id=\'\' WHERE id=?',(self.uid,));app.UPLOAD_RESERVATIONS.pop(self.uid,None)
+    def post(self,path,body,status=200,admin=False):
+        result=(self.admin_client if admin else self.client).post(path,json=body,headers=self.headers);self.assertEqual(result.status_code,status,result.json);return result.json
+    def plan(self,**values):
+        result=dict(title='Wochenstream',enabled=True,timezone='Europe/Berlin',days=[0,2],start='10:00',end='13:00',playlist_id=self.playlist,targets=['twitch','youtube'],sync_twitch=False);result.update(values);return result
+    def test_expert_preference_restores_after_password_login_and_can_be_disabled(self):
+        self.post('/api/expert-mode',{'enabled':True});self.client.post('/api/logout',headers=self.headers);self.client.get('/login')
+        with self.client.session_transaction() as session:csrf=session['csrf']
+        response=self.client.post('/login',data={'username':self.user['username'],'password':'Studio-V2-Fixture-Password-123','csrf':csrf});self.assertEqual(response.status_code,302)
+        self.assertTrue(self.client.get('/api/expert-mode').json['expert_mode'])
+        with self.client.session_transaction() as session:csrf=session['csrf']
+        self.client.post('/api/expert-mode',json={'enabled':False},headers={'X-CSRF-Token':csrf})
+        self.assertEqual(app.rows('SELECT expert_preference FROM users WHERE id=?',(self.uid,))[0]['expert_preference'],0)
+    def test_preferences_are_personal_and_validate_text_and_corner(self):
+        before=app.STUDIO.preferences(app.rows('SELECT * FROM users WHERE id=?',(self.other,))[0])
+        body=dict(switch_text='Switching…',replay_label='Archiv: 100% live?',replay_corner='bottom-right')
+        with patch.object(app.STUDIO,'switch_file',return_value='fixture'),patch.object(app,'reconcile'):
+            self.post('/api/studio/preferences',body)
+        self.assertEqual(self.client.get('/api/studio/preferences').json,body)
+        self.assertEqual(app.STUDIO.preferences(app.rows('SELECT * FROM users WHERE id=?',(self.other,))[0]),before)
+        for change in ({'switch_text':''},{'replay_label':'bad\nline'},{'replay_corner':'center'}):self.post('/api/studio/preferences',{**body,**change},400)
+    def test_player_uses_own_switch_text_and_overlay_supports_four_corners(self):
+        app.write("UPDATE users SET switch_text='Switch V2' WHERE id=?",(self.uid,))
+        self.assertIn(b'Switch V2',self.client.get('/program/main/').data)
+        for corner,position in [('top-left','x=30:y=30'),('top-right','x=w-text_w-30:y=30'),('bottom-left','x=30:y=h-text_h-30'),('bottom-right','x=w-text_w-30:y=h-text_h-30')]:
+            self.assertIn(position,app.STUDIO.overlay(dict(self.user,replay_corner=corner)))
+    def test_plans_crud_are_available_without_expert_and_tenant_private(self):
+        ident=self.post('/api/planner',self.plan())['id'];self.assertEqual(self.client.get('/api/planner').json['plans'][0]['id'],ident)
+        self.post('/api/planner/'+str(ident),self.plan(title='Umbenannt',days=[1],start='12:00',end='14:00'))
+        self.assertEqual(self.client.get('/api/planner').json['plans'][0]['title'],'Umbenannt')
+        other=app.write('INSERT INTO stream_plans(user_id,title,timezone,days,start,end,playlist_id,targets) VALUES (?,?,?,?,?,?,?,?)',(self.other,'Privat','UTC','[1]','10:00','11:00',1,'["twitch"]'))
+        try:
+            self.post('/api/planner/'+str(other),self.plan(),404)
+            self.assertEqual(self.client.delete('/api/planner/'+str(other),headers=self.headers).status_code,404)
+        finally:app.write('DELETE FROM stream_plans WHERE id=?',(other,))
+        self.assertEqual(self.client.delete('/api/planner/'+str(ident),headers=self.headers).status_code,200)
+    def test_plan_csrf_foreign_playlist_and_invalid_targets_are_rejected(self):
+        self.assertEqual(self.client.post('/api/planner',json=self.plan()).status_code,403)
+        foreign=app.write('INSERT INTO playlists(user_id,name) VALUES (?,?)',(self.other,'Private V2'))
+        try:self.post('/api/planner',self.plan(playlist_id=foreign),404)
+        finally:app.write('DELETE FROM playlists WHERE id=?',(foreign,))
+        for change in ({'targets':[]},{'targets':['bogus']},{'days':[True]},{'timezone':'bad/time'},{'enabled':'yes'},{'start':'24:30'},{'sync_twitch':True,'end':'10:15'},{'sync_twitch':True,'end':'10:00'}):self.post('/api/planner',self.plan(**change),400)
+    def test_shared_playlist_rejects_conflicting_schedules_but_allows_distinct_targets(self):
+        self.post('/api/planner',self.plan(targets=['twitch']))
+        self.post('/api/planner',self.plan(targets=['youtube'],playlist_id=self.second),409)
+        self.post('/api/planner',self.plan(targets=['youtube']))
+        self.post('/api/planner',self.plan(targets=['twitch']),409)
+    def test_plan_midnight_and_dst_repeat_are_single_window(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        self.post('/api/planner',self.plan(days=[6],start='23:00',end='01:00'))
+        monday=datetime(2026,11,2,0,30,tzinfo=ZoneInfo('Europe/Berlin')).timestamp()
+        active=app.STUDIO.active(self.user,'twitch',monday);self.assertIsNotNone(active)
+        self.assertIsNone(app.STUDIO.active(self.user,'twitch',monday+3600))
+    def test_assigned_plan_playlist_cannot_be_deleted_or_emptied(self):
+        self.post('/api/planner',self.plan())
+        self.assertEqual(self.client.delete('/api/playlists/'+str(self.playlist),headers=self.headers).status_code,409)
+        self.post('/api/playlists/'+str(self.playlist),{'name':'Empty','items':[]},409)
+    def test_automatic_planner_start_stop_and_manual_stop_precedence(self):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+        self.post('/api/planner',self.plan());stamp=datetime(2026,11,2,10,30,tzinfo=ZoneInfo('Europe/Berlin')).timestamp()
+        original=app.STUDIO.active;config=app.yaml.safe_load(app.CONFIG.read_text());program=app.MODEL.program(self.user)
+        def fake_forward(user,enabled,kind=None,origin='manual'):config['paths'][app.output_path(user,kind)]['forward']=[{'dest':'fixture'}] if enabled else []
+        with patch.object(app.STUDIO,'active',side_effect=lambda user,kind,at=None:original(user,kind,stamp if at is None else at)),patch.object(app,'forward',side_effect=fake_forward) as forward,patch.object(app,'configured_forwards',side_effect=lambda user:{app.output_path(user,k):config['paths'][app.output_path(user,k)]['forward'] for k in ('twitch','youtube')}):
+            app.STUDIO.tick_outputs(self.user,program,config,10);self.assertEqual(forward.call_count,2)
+            app.STUDIO.manual_control(self.user,'twitch');config['paths'][app.output_path(self.user,'twitch')]['forward']=[]
+            app.STUDIO.tick_outputs(self.user,program,config,11);self.assertEqual(forward.call_count,2)
+            stamp+=4*3600;app.STUDIO.tick_outputs(self.user,program,config,12);self.assertEqual(forward.call_count,3)
+            self.assertEqual(forward.call_args.kwargs['kind'],'youtube')
+    def test_service_gates_pause_plans_and_ftp_without_losing_configuration(self):
+        self.post('/api/planner',self.plan());flags=app.SERVICES.flags();flags['automation']=False;flags['ftp']=False;app.set_setting('service_policy',self.json.dumps(flags))
+        self.assertEqual(self.client.get('/api/planner').status_code,403);self.assertEqual(self.client.get('/api/ftp').status_code,403)
+        self.assertTrue(app.rows('SELECT * FROM stream_plans WHERE user_id=?',(self.uid,)))
+    def test_shared_source2_encoder_is_created_once_and_lives_until_last_client(self):
+        playlist=app.rows('SELECT * FROM playlists WHERE id=?',(self.playlist,))[0];plan=dict(playlist=playlist,scheduled=False)
+        first=app.MODEL.program(self.user);second=dict(first,id='other-program');process=SimpleNamespace(poll=lambda:None,terminate=lambda:None,wait=lambda **_:None)
+        with patch.object(app,'mtx'),patch.object(app.PLAYLISTS,'output_ready',return_value=True),patch('playlist_features.subprocess.Popen',return_value=process) as popen:
+            app.PLAYLISTS.start(self.user,first,plan);app.PLAYLISTS.start(self.user,second,plan)
+            self.assertEqual(popen.call_count,1);self.assertEqual(len(app.PLAYLISTS.feeds[self.uid]['clients']),2)
+            command=popen.call_args.args[0];self.assertIn('drawtext=',next(value for value in command if 'drawtext=' in value))
+            self.assertEqual(command[-1],app.RTSP+self.user['prefix']+'playlist-source2')
+            job=app.PLAYLISTS.jobs[(self.uid,'main')];job['progress'].write_text('out_time_us=3200000\n')
+            app.PLAYLISTS.checkpoint((self.uid,'main'),pause=True);self.assertIn(self.uid,app.PLAYLISTS.feeds)
+            flags=app.SERVICES.flags();flags['playlists']=False;app.set_setting('service_policy',self.json.dumps(flags));app.SERVICES.enforce_local();self.assertNotIn(self.uid,app.PLAYLISTS.feeds)
+        self.assertAlmostEqual(app.rows('SELECT offset FROM playlist_positions WHERE user_id=? AND program=?',(self.uid,'source2-playlist'))[0]['offset'],3.2)
+    def test_slow_playlist_start_survives_five_seconds_without_blocking_or_restart(self):
+        from unittest.mock import Mock
+        playlist=app.rows('SELECT * FROM playlists WHERE id=?',(self.playlist,))[0];plan=dict(playlist=playlist,scheduled=True);program=app.MODEL.program(self.user)
+        process=Mock();process.poll.return_value=None
+        with patch('playlist_features.subprocess.Popen',return_value=process) as spawn,patch('playlist_features.time.sleep') as sleep:
+            with self.assertRaises(app.PlaylistStarting):app.PLAYLISTS.start(self.user,program,plan)
+            feed=app.PLAYLISTS.feeds[self.uid];feed['started']-=8
+            with self.assertRaises(app.PlaylistStarting):app.PLAYLISTS.start(self.user,program,plan)
+            self.assertIs(app.PLAYLISTS.feeds[self.uid],feed);self.assertEqual(spawn.call_count,1);process.terminate.assert_not_called();sleep.assert_not_called()
+            feed['job']['progress'].write_text('frame=1\nout_time_us=-1\n')
+            with self.assertRaises(app.PlaylistStarting):app.PLAYLISTS.start(self.user,program,plan)
+            feed['job']['progress'].write_text('frame=1\nout_time_us=N/A\n')
+            with self.assertRaises(app.PlaylistStarting):app.PLAYLISTS.start(self.user,program,plan)
+            feed['job']['progress'].write_text('frame=1\nout_time_us=33333\n')
+            with self.assertRaises(app.PlaylistStarting):app.PLAYLISTS.start(self.user,program,plan)
+            feed['job']['progress'].write_text('frame=2\nout_time_us=33333\n')
+            args,_=app.PLAYLISTS.start(self.user,program,plan)
+            self.assertIn(feed['path'],args[-1]);self.assertFalse(feed['job']['preparing']);self.assertEqual(spawn.call_count,1)
+    def test_playlist_bookmark_in_rounding_tail_starts_next_cycle(self):
+        playlist=app.rows('SELECT * FROM playlists WHERE id=?',(self.playlist,))[0];plan=dict(playlist=playlist,scheduled=True);program=dict(app.MODEL.program(self.user),id='source2-playlist')
+        total=app.rows('SELECT duration FROM videos WHERE id=?',(self.video,))[0]['duration']
+        for remaining in (.06908,0.0):
+            app.write('INSERT OR REPLACE INTO playlist_positions(user_id,program,playlist_id,revision,offset) VALUES (?,?,?,?,?)',(self.uid,program['id'],self.playlist,playlist['revision'],total-remaining))
+            inputs,_=app.PLAYLISTS.prepare(self.user,program,plan)
+            self.assertEqual(float(inputs[inputs.index('-ss')+1]),0)
+            self.assertEqual(app.PLAYLISTS.jobs[(self.uid,program['id'])]['offset'],0)
+    def test_playlist_normal_bookmark_is_preserved(self):
+        playlist=app.rows('SELECT * FROM playlists WHERE id=?',(self.playlist,))[0];program=dict(app.MODEL.program(self.user),id='source2-playlist')
+        app.write('INSERT OR REPLACE INTO playlist_positions(user_id,program,playlist_id,revision,offset) VALUES (?,?,?,?,?)',(self.uid,program['id'],self.playlist,playlist['revision'],1.5))
+        inputs,_=app.PLAYLISTS.prepare(self.user,program,dict(playlist=playlist,scheduled=False))
+        self.assertEqual(float(inputs[inputs.index('-ss')+1]),1.5)
+    def test_playlist_start_timeout_cleans_pending_encoder(self):
+        from unittest.mock import Mock
+        playlist=app.rows('SELECT * FROM playlists WHERE id=?',(self.playlist,))[0];plan=dict(playlist=playlist,scheduled=False);program=app.MODEL.program(self.user)
+        process=Mock();process.poll.return_value=None
+        with patch('playlist_features.subprocess.Popen',return_value=process):
+            with self.assertRaises(app.PlaylistStarting):app.PLAYLISTS.start(self.user,program,plan)
+            app.PLAYLISTS.feeds[self.uid]['started']-=46
+            with self.assertRaises(app.Error):app.PLAYLISTS.start(self.user,program,plan)
+            self.assertNotIn(self.uid,app.PLAYLISTS.feeds);self.assertNotIn((self.uid,'main'),app.PLAYLISTS.jobs);process.terminate.assert_called_once()
+    def test_controller_keeps_warming_playlist_and_live_input_can_interrupt_it(self):
+        from unittest.mock import Mock
+        playlist=app.rows('SELECT * FROM playlists WHERE id=?',(self.playlist,))[0];plan=dict(playlist=playlist,scheduled=True);program=app.MODEL.program(self.user)
+        config=app.yaml.safe_load(app.CONFIG.read_text());config['paths'][app.output_path(self.user)]['forward']=[{'dest':'fixture'}]
+        process=Mock();process.poll.return_value=None;engine=app.Engine();paths={program['path']:{'available':True}}
+        with patch.object(app.STUDIO,'tick_outputs'),patch.object(app.PLAYLISTS,'decision',return_value=(plan,True)),patch.object(app.PLAYLISTS,'automatic'),patch('playlist_features.subprocess.Popen',return_value=process) as spawn:
+            for now in (100,108):
+                result=engine.program_tick(self.user,program,[],paths,config,True,now,'',app.MODEL.policy(self.user))
+                self.assertTrue(result['playlist']['preparing'])
+            self.assertEqual(spawn.call_count,1);process.terminate.assert_not_called()
+            result=engine.program_tick(self.user,program,[self.user['prefix']+'source1'],paths,config,True,109,'',app.MODEL.policy(self.user))
+            self.assertNotIn(self.uid,app.PLAYLISTS.feeds);self.assertEqual(spawn.call_count,2);process.terminate.assert_called_once()
+            engine.stop_relay(self.uid)
+    def test_twitch_sync_creates_owned_recurring_segments_and_updates_without_duplicates(self):
+        ident=self.post('/api/planner',self.plan(sync_twitch=True))['id']
+        with patch.object(app.STUDIO,'twitch_call',return_value={'data':{'segments':[{'id':'fixture-segment'}]}}) as twitch:
+            app.STUDIO.sync_twitch();self.assertEqual(twitch.call_count,2)
+            self.assertTrue(twitch.call_args.args[2]['is_recurring'])
+            app.STUDIO.sync_twitch();self.assertEqual(twitch.call_count,2)
+            self.post('/api/planner/'+str(ident),self.plan(sync_twitch=True,title='New title'))
+            app.STUDIO.sync_twitch();self.assertEqual(twitch.call_args.args[1],'PATCH');self.assertNotIn('is_recurring',twitch.call_args.args[2])
+            self.client.delete('/api/planner/'+str(ident),headers=self.headers);app.STUDIO.sync_twitch()
+            self.assertEqual(twitch.call_args.args[1],'DELETE');self.assertFalse(app.rows('SELECT * FROM twitch_plan_segments WHERE user_id=?',(self.uid,)))
+    def test_missing_twitch_schedule_permission_does_not_make_remote_changes(self):
+        with patch.object(app,'remote') as remote:
+            with self.assertRaises(app.Error):app.STUDIO.twitch_call(self.user,'POST',{})
+            remote.assert_not_called()
+    def test_renaming_an_active_playlist_updates_status_without_resetting_position(self):
+        playlist=app.rows('SELECT * FROM playlists WHERE id=?',(self.playlist,))[0]
+        app.PLAYLISTS.prepare(self.user,app.MODEL.program(self.user),dict(playlist=playlist,scheduled=False))
+        job=app.PLAYLISTS.jobs[(self.uid,'main')];job['progress'].write_text('out_time_us=2500000\n')
+        self.post('/api/playlists/'+str(self.playlist),{'name':'Neuer Sendename','items':[self.video]})
+        self.assertEqual(job['name'],'Neuer Sendename');self.assertAlmostEqual(app.PLAYLISTS.position(job),2.5)
+        self.assertEqual(app.rows('SELECT revision FROM playlists WHERE id=?',(self.playlist,))[0]['revision'],1)
+    def test_switch_file_and_track_placeholders_are_mutually_exclusive(self):
+        with patch.object(app.STUDIO,'switch_file',return_value='/fixture/switch.mp4'):
+            app.reconcile()
+            config=app.yaml.safe_load(app.CONFIG.read_text());path=self.user['prefix']+'live'
+            self.assertEqual(config['paths'][path]['alwaysAvailableFile'],'/fixture/switch.mp4')
+            self.assertEqual(config['paths'][path]['alwaysAvailableTracks'],[])
+            with patch.object(app,'mtx'):app.forward(self.user,False,kind='twitch')
+            self.assertEqual(app.yaml.safe_load(app.CONFIG.read_text())['paths'][path]['alwaysAvailableTracks'],[])
+    def test_remote_without_shared_storage_never_sends_local_switch_file(self):
+        with patch.dict(os.environ,{'STREAMDESK_MEDIAMTX_MODE':'remote-api','STREAMDESK_NATIVE_SHARED':'0'}):
+            self.assertEqual(app.STUDIO.switch_file(self.user,create=True),'')
+    def test_failed_playlist_encoder_is_stopped_and_does_not_leave_clients(self):
+        playlist=app.rows('SELECT * FROM playlists WHERE id=?',(self.playlist,))[0]
+        process=SimpleNamespace(poll=lambda:1)
+        with patch('playlist_features.subprocess.Popen',return_value=process):
+            with self.assertRaises(app.Error):app.PLAYLISTS.start(self.user,app.MODEL.program(self.user),dict(playlist=playlist,scheduled=False))
+        self.assertNotIn(self.uid,app.PLAYLISTS.feeds);self.assertNotIn((self.uid,'main'),app.PLAYLISTS.jobs)
+    def test_preference_failure_restores_database(self):
+        before=self.client.get('/api/studio/preferences').json
+        with patch.object(app.STUDIO,'switch_file',return_value='/fixture/switch.mp4'),patch.object(app,'reconcile',side_effect=app.Error('fixture failure')):
+            self.post('/api/studio/preferences',dict(switch_text='Changed',replay_label='Changed',replay_corner='bottom-left'),400)
+        self.assertEqual(self.client.get('/api/studio/preferences').json,before)
+    def provision(self):
+        with patch.dict(os.environ,{'STREAMDESK_FTP_ENABLED':'1'}):return self.post('/api/admin/users/'+str(self.uid)+'/ftp',{'enabled':True,'password':'FTP-Fixture-Password-123'},admin=True)
+    def test_ftp_creation_is_admin_only_and_password_is_private_hash(self):
+        with patch.dict(os.environ,{'STREAMDESK_FTP_ENABLED':'1'}):
+            self.post('/api/admin/users/'+str(self.uid)+'/ftp',{'enabled':True,'password':'FTP-Fixture-Password-123'},403)
+        result=self.provision();self.assertEqual(result['username'],'sd_'+app.NAMESPACE+'_'+str(self.uid))
+        row=app.rows('SELECT * FROM ftp_accounts WHERE user_id=?',(self.uid,))[0]
+        self.assertNotEqual(row['password'],'FTP-Fixture-Password-123');self.assertTrue(app.check_password_hash(row['password'],'FTP-Fixture-Password-123'))
+        self.assertNotIn('password',self.client.get('/api/ftp').get_data(as_text=True))
+        self.post('/api/ftp/password',{'password':'short'},400);self.post('/api/ftp/password',{'password':'Changed-FTP-Fixture-123'})
+        self.assertTrue(app.check_password_hash(app.rows('SELECT password FROM ftp_accounts WHERE user_id=?',(self.uid,))[0]['password'],'Changed-FTP-Fixture-123'))
+    @patch.dict(os.environ,STREAMDESK_FTP_ENABLED='1')
+    def test_ftp_library_mirrors_web_names_nested_folders_and_renames_without_copy(self):
+        folder=app.write('INSERT INTO playlist_folders(user_id,name) VALUES (?,?)',(self.uid,'Web Videos'))
+        child=app.write('INSERT INTO playlist_folders(user_id,name,parent_id) VALUES (?,?,?)',(self.uid,'Sommer',folder))
+        app.write('UPDATE videos SET name=?,folder_id=? WHERE id=?',('Mein Film.mp4',child,self.video))
+        self.post('/api/admin/users/'+str(self.uid)+'/ftp',{'enabled':True,'password':'FTP-Library-Fixture-123'},admin=True)
+        info=self.client.get('/api/ftp').json;root=app.FTP.root/str(self.uid)/info['library_path'].lstrip('/')
+        original=Path(app.rows('SELECT path FROM videos WHERE id=?',(self.video,))[0]['path']);alias=root/'Web Videos'/'Sommer'/'Mein Film.mp4'
+        self.assertTrue(alias.samefile(original));self.assertEqual(alias.read_bytes(),original.read_bytes())
+        self.assertEqual(alias.stat().st_mode&0o222,0);self.assertTrue(alias.parent.stat().st_mode&0o200)
+        self.assertNotIn(self.user['password'],self.json.dumps(info))
+        app.write('UPDATE videos SET name=? WHERE id=?',('Neuer Name',self.video));app.FTP.sync_library(self.user)
+        self.assertFalse(alias.exists());self.assertTrue((alias.parent/'Neuer Name.mp4').samefile(original))
+        app.write('UPDATE playlist_folders SET name=? WHERE id=?',('Archiv',folder));app.FTP.sync_library(self.user)
+        self.assertFalse((root/'Web Videos').exists());self.assertTrue((root/'Archiv'/'Sommer'/'Neuer Name.mp4').samefile(original))
+        self.assertFalse((root/'..'/'..'/str(self.other)/'Bibliothek'/'Archiv').exists())
+        app.write('UPDATE videos SET folder_id=NULL WHERE id=?',(self.video,))
+    @patch.dict(os.environ,STREAMDESK_FTP_ENABLED='1')
+    def test_ftp_library_rejects_symlink_sources_and_import_events(self):
+        import time
+        self.post('/api/admin/users/'+str(self.uid)+'/ftp',{'enabled':True,'password':'FTP-Library-Fixture-123'},admin=True)
+        info=self.client.get('/api/ftp').json;home=app.FTP.root/str(self.uid);root=home/info['library_path'].lstrip('/')
+        fake=home/'outside.mp4';fake.write_bytes(b'not a library file')
+        link=app.DATA/'media'/self.user['username']/'bad-library.mp4';link.symlink_to(fake)
+        ident=app.write('INSERT INTO videos(user_id,name,path,duration,size,created) VALUES (?,?,?,?,?,?)',(self.uid,'Bad symlink',str(link),2,18,int(time.time())))
+        try:
+            app.FTP.sync_library(self.user);self.assertFalse((root/'Bad symlink.mp4').exists())
+            original=next(root.rglob('*.mp4'));logfile=app.DATA/'test-ftp-library.log'
+            logfile.write_text(f'1000 test {info["account"]["username"]} 127.0.0.1 U 10 1 {original}\n')
+            with patch.dict(os.environ,STREAMDESK_FTP_LOG=str(logfile)):
+                app.write('DELETE FROM ftp_log_state');app.FTP.ingest_log()
+                self.assertFalse(app.rows('SELECT * FROM ftp_imports WHERE user_id=?',(self.uid,)))
+        finally:
+            app.write('DELETE FROM videos WHERE id=?',(ident,));link.unlink();fake.unlink();app.write('DELETE FROM ftp_log_state')
+    @patch.dict(os.environ,STREAMDESK_FTP_ENABLED='1')
+    def test_ftp_sync_preserves_uploads_and_maps_library_folder_ids(self):
+        parent=app.write('INSERT INTO playlist_folders(user_id,name) VALUES (?,?)',(self.uid,'Vorträge: 2026'))
+        child=app.write('INSERT INTO playlist_folders(user_id,name,parent_id) VALUES (?,?,?)',(self.uid,'Sommer',parent))
+        self.post('/api/admin/users/'+str(self.uid)+'/ftp',{'enabled':True,'password':'FTP-Library-Fixture-123'},admin=True)
+        view=app.rows('SELECT * FROM ftp_library_views WHERE user_id=?',(self.uid,))[0];root=app.FTP.root/str(self.uid)/view['name'];folder=root/'Vorträge_ 2026'/'Sommer'
+        upload=folder/'Neu.mp4';upload.write_bytes(b'completed-upload');partial=folder/'.pureftpd-test';partial.write_bytes(b'incomplete')
+        app.FTP.sync_library(self.user);self.assertEqual(upload.read_bytes(),b'completed-upload');self.assertEqual(partial.read_bytes(),b'incomplete')
+        relative=upload.relative_to(app.FTP.root/str(self.uid));self.assertEqual(app.FTP.upload_folder(self.user,relative),child)
+        app.write('UPDATE playlist_folders SET name=? WHERE id=?',('Archiv',parent));app.FTP.sync_library(self.user)
+        self.assertTrue(upload.exists());self.assertTrue(partial.exists());self.assertEqual(app.FTP.upload_folder(self.user,relative),child)
+        nested=folder/'Neue Folgen';nested.mkdir();target=app.FTP.upload_folder(self.user,(nested/'Neu.mp4').relative_to(app.FTP.root/str(self.uid)))
+        self.assertEqual(app.rows('SELECT parent_id FROM playlist_folders WHERE id=?',(target,))[0]['parent_id'],child)
+    @patch.dict(os.environ,STREAMDESK_FTP_ENABLED='1')
+    def test_library_payload_with_existing_video_name_survives_web_rename(self):
+        self.post('/api/admin/users/'+str(self.uid)+'/ftp',{'enabled':True,'password':'FTP-Library-Fixture-123'},admin=True)
+        view=app.rows('SELECT * FROM ftp_library_views WHERE user_id=?',(self.uid,))[0];root=app.FTP.root/str(self.uid)/view['name'];payload=root/'Neue FTP Datei.mp4';payload.write_bytes(b'pending-upload')
+        app.write('UPDATE videos SET name=? WHERE id=?',('Neue FTP Datei.mp4',self.video));app.FTP.sync_library(self.user)
+        self.assertEqual(payload.read_bytes(),b'pending-upload')
+        links=[path for path in root.glob('Neue FTP Datei*.mp4') if path!=payload]
+        self.assertEqual(len(links),1);self.assertTrue(links[0].samefile(Path(app.rows('SELECT path FROM videos WHERE id=?',(self.video,))[0]['path'])))
+    def test_library_reference_index_parses_each_playlist_only_once(self):
+        rows=[dict(id=self.video+index,name='Video',duration=2) for index in range(500)]
+        original=app.PLAYLISTS.c.json.loads
+        with patch.object(app.PLAYLISTS.c.json,'loads',wraps=original) as loads:
+            app.PLAYLISTS.media_details(self.user,rows)
+        self.assertLess(loads.call_count,10)
+    def test_ftp_connection_always_uses_ingest_and_ignores_legacy_host(self):
+        self.provision()
+        with patch.object(app,'HOST','135.125.128.226'),patch.dict(os.environ,{'STREAMDESK_FTP_HOST':'wrong-ui.example.test','STREAMDESK_FTP_PORT':'2221'}):
+            own=self.client.get('/api/ftp').json
+            admin=self.admin_client.get('/api/admin/users/'+str(self.uid)+'/ftp').json
+            self.assertEqual(own['host'],'135.125.128.226');self.assertEqual(admin['host'],own['host']);self.assertEqual(admin['port'],2221)
+            self.assertEqual(admin['account']['username'],own['account']['username']);self.assertNotIn('password',admin)
+        with patch.object(app,'HOST','[2001:db8::42]'):
+            self.assertEqual(self.client.get('/api/ftp').json['host'],'2001:db8::42')
+    def test_admin_ftp_details_are_admin_only_and_allow_unconfigured_status(self):
+        route='/api/admin/users/'+str(self.uid)+'/ftp'
+        self.assertEqual(self.client.get(route).status_code,403)
+        result=self.admin_client.get(route);self.assertEqual(result.status_code,200);self.assertIsNone(result.json['account'])
+        self.assertEqual(result.json['user']['id'],self.uid)
+        self.assertEqual(self.admin_client.get('/api/admin/users/9999999/ftp').status_code,404)
+    def test_ftp_save_returns_selected_user_connection_and_keeps_password_on_toggle(self):
+        created=self.provision();self.assertEqual(created['user']['id'],self.uid);self.assertTrue(created['account']['enabled']);self.assertTrue(created['configured'])
+        password=app.rows('SELECT password FROM ftp_accounts WHERE user_id=?',(self.uid,))[0]['password']
+        with patch.dict(os.environ,{'STREAMDESK_FTP_ENABLED':'1'}):
+            saved=self.post('/api/admin/users/'+str(self.uid)+'/ftp',{'enabled':False,'password':''},admin=True)
+        self.assertFalse(saved['account']['enabled']);self.assertEqual(saved['username'],created['username'])
+        self.assertEqual(app.rows('SELECT password FROM ftp_accounts WHERE user_id=?',(self.uid,))[0]['password'],password)
+    def test_pureftpd_auth_requires_tls_active_account_and_own_chroot(self):
+        from ftp_auth import authenticate
+        account=self.provision()['username'];env=dict(STREAMDESK_DATA=str(app.DATA),AUTHD_ACCOUNT=account,AUTHD_PASSWORD='FTP-Fixture-Password-123',AUTHD_ENCRYPTED='1',STREAMDESK_FTP_UID='1000',STREAMDESK_FTP_GID='1000')
+        result=authenticate(env);self.assertEqual(result['home'],str(app.DATA/'ftp'/str(self.uid)))
+        self.assertIsNone(authenticate({**env,'AUTHD_ENCRYPTED':'0'}));self.assertIsNone(authenticate({**env,'AUTHD_PASSWORD':'Wrong-password-123'}));self.assertIsNone(authenticate({**env,'STREAMDESK_FTP_UID':'0'}))
+        app.write('UPDATE ftp_accounts SET enabled=0 WHERE user_id=?',(self.uid,));self.assertIsNone(authenticate(env))
+    def test_ftp_import_waits_for_transfer_event_and_reuses_conversion_pipeline(self):
+        account=self.provision()['username'];home=app.DATA/'ftp'/str(self.uid);folder=home/'Nacht';folder.mkdir(exist_ok=True);source=folder/'Film.mp4';source.write_bytes(b'fixture-video')
+        logfile=app.DATA/'ftp-transfers.log';prior=logfile.read_bytes() if logfile.exists() else None
+        try:
+            app.FTP.ingest_log();self.assertFalse(app.rows('SELECT * FROM ftp_imports WHERE user_id=?',(self.uid,)))
+            logfile.write_text('1000 unique '+account+' 127.0.0.1 U 13 1 '+str(source)+'\n')
+            app.write('DELETE FROM ftp_log_state');app.FTP.ingest_log();app.FTP.ingest_log()
+            rows=app.rows('SELECT * FROM ftp_imports WHERE user_id=?',(self.uid,));self.assertEqual(len(rows),1)
+            with patch.object(app.JOBS,'submit') as submit:
+                app.FTP.import_one(rows[0]);self.assertIs(submit.call_args.args[0],app.convert);self.assertEqual(submit.call_args.args[4],app.rows("SELECT id FROM playlist_folders WHERE user_id=? AND name='Nacht'",(self.uid,))[0]['id'])
+                self.assertFalse(source.exists());Path(submit.call_args.args[2]).unlink()
+            self.assertEqual(app.rows('SELECT name FROM playlist_folders WHERE user_id=?',(self.uid,))[0]['name'],'Nacht')
+        finally:
+            if prior is None:logfile.unlink(missing_ok=True)
+            else:logfile.write_bytes(prior)
+            app.write('DELETE FROM ftp_log_state')
+    def test_ftp_log_rejects_foreign_and_symlink_files(self):
+        account=self.provision()['username'];home=app.DATA/'ftp'/str(self.uid);link=home/'escape.mp4';link.symlink_to(Path(app.owned_video(self.user,self.video)['path']))
+        logfile=app.DATA/'ftp-transfers.log';prior=logfile.read_bytes() if logfile.exists() else None
+        try:
+            logfile.write_text('1000 bad '+account+' 127.0.0.1 U 12 1 '+str(link)+'\n1001 bad '+account+' 127.0.0.1 U 12 1 /etc/foreign.mp4\n');app.write('DELETE FROM ftp_log_state');app.FTP.ingest_log()
+            self.assertFalse(app.rows('SELECT * FROM ftp_imports WHERE user_id=?',(self.uid,)))
+        finally:
+            link.unlink()
+            if prior is None:logfile.unlink(missing_ok=True)
+            else:logfile.write_bytes(prior)
+            app.write('DELETE FROM ftp_log_state')
+
+    @patch.dict(os.environ,STREAMDESK_FTP_ENABLED='1')
+    def test_oversized_legacy_ftp_file_is_retried_without_another_upload(self):
+        self.provision();home=app.FTP.root/str(self.uid);source=home/'Large regression.mp4'
+        with source.open('wb') as stream:stream.truncate(6*1024**3)
+        inode=source.stat().st_ino;ident='old-size-fixture'
+        app.write("INSERT INTO ftp_imports(id,user_id,path,size,state,message,created) VALUES (?,?,?,?,'error',?,?)",(ident,self.uid,str(source),source.stat().st_size,'Nur MP4-Dateien bis 500 MB können importiert werden.',app.time.time()))
+        app.FTP.recover_old_size_errors();app.FTP.recover_old_size_errors()
+        row=app.rows('SELECT * FROM ftp_imports WHERE id=?',(ident,))[0];self.assertEqual(row['state'],'queued')
+        with patch.object(app.JOBS,'submit') as submit:
+            app.FTP.import_one(row)
+        target=Path(submit.call_args.args[2])
+        try:
+            self.assertEqual(target.stat().st_size,6*1024**3);self.assertEqual(target.stat().st_ino,inode)
+            self.assertFalse(source.exists());self.assertEqual(len(app.rows('SELECT * FROM ftp_imports WHERE id=?',(ident,))),1)
+            self.assertNotIn(str(target),self.client.get('/api/ftp').get_data(as_text=True))
+        finally:target.unlink(missing_ok=True)
+
+    @patch.dict(os.environ,STREAMDESK_FTP_ENABLED='1')
+    def test_failed_ftp_source_is_private_retryable_and_retained_until_success(self):
+        self.provision();source=app.FTP.root/str(self.uid)/'Retry regression.mp4';source.write_bytes(b'fixture-video')
+        ident='retry-fixture';app.write("INSERT INTO ftp_imports(id,user_id,path,size,created) VALUES (?,?,?,?,0)",(ident,self.uid,str(source),source.stat().st_size))
+        with patch.object(app.JOBS,'submit') as submit:app.FTP.import_one(app.rows('SELECT * FROM ftp_imports WHERE id=?',(ident,))[0])
+        args=submit.call_args.args;kwargs=submit.call_args.kwargs;target=Path(args[2])
+        probe=SimpleNamespace(stdout=self.json.dumps({'format':{'duration':'10801'},'streams':[{'codec_type':'video'},{'codec_type':'audio'}]}))
+        with patch.object(app.subprocess,'run',return_value=probe),patch.object(app.shutil,'disk_usage',return_value=SimpleNamespace(free=100*1024**3)),patch.object(app.UPLOADS,'encode',side_effect=app.Error('Fixture conversion failure')):
+            app.convert(*args[1:],**kwargs)
+        app.FTP.run();row=app.rows('SELECT * FROM ftp_imports WHERE id=?',(ident,))[0]
+        self.assertEqual(row['state'],'error');self.assertTrue(target.exists())
+        own=next(item for item in self.client.get('/api/ftp').json['imports'] if item['id']==ident)
+        self.assertTrue(own['retryable']);self.assertTrue(own['retained']);self.assertNotIn('staging',own);self.assertNotIn('path',own)
+        app.write('INSERT INTO ftp_accounts(user_id,username,password) VALUES (?,?,?)',(self.other,'foreign-retry-fixture','unused-fixture'))
+        with self.admin_client.session_transaction() as session:session['uid']=self.other
+        self.assertEqual(self.admin_client.post('/api/ftp/imports/'+ident+'/retry',json={},headers=self.headers).status_code,404)
+        app.write('DELETE FROM ftp_accounts WHERE user_id=?',(self.other,))
+        self.assertEqual(self.client.post('/api/ftp/imports/'+ident+'/retry',json={}).status_code,403)
+        self.post('/api/ftp/imports/'+ident+'/retry',{});self.post('/api/ftp/imports/'+ident+'/retry',{})
+        with patch.object(app.JOBS,'submit') as again:app.FTP.import_one(app.rows('SELECT * FROM ftp_imports WHERE id=?',(ident,))[0])
+        self.assertEqual(again.call_args.args[2],target)
+        def encoded(command,*_,**__):Path(command[-1]).write_bytes(b'encoded-video')
+        with patch.object(app.subprocess,'run',return_value=probe),patch.object(app.shutil,'disk_usage',return_value=SimpleNamespace(free=100*1024**3)),patch.object(app.UPLOADS,'encode',side_effect=encoded) as encode:
+            app.convert(*again.call_args.args[1:],**again.call_args.kwargs)
+        self.assertEqual(len(encode.call_args.args),4)  # No total conversion deadline.
+        self.assertFalse(target.exists());app.FTP.run()
+        self.assertEqual(app.rows('SELECT state,staging FROM ftp_imports WHERE id=?',(ident,))[0],{'state':'ready','staging':''})
+        video=app.rows("SELECT * FROM videos WHERE user_id=? AND name='Retry regression.mp4'",(self.uid,))[0]
+        self.assertEqual(video['duration'],10801);Path(video['path']).unlink();app.write('DELETE FROM videos WHERE id=?',(video['id'],))
+
+    @patch.dict(os.environ,STREAMDESK_FTP_ENABLED='1')
+    def test_retained_ftp_source_can_be_discarded_only_by_owner_when_failed(self):
+        self.provision();home=app.FTP.root/str(self.uid);target=app.DATA/'uploads'/('ftp-'+'f'*32+'.mp4');target.parent.mkdir(exist_ok=True);target.write_bytes(b'retained-source')
+        ident='discard-fixture';app.write("INSERT INTO ftp_imports(id,user_id,path,size,state,staging,created) VALUES (?,?,?,15,'error',?,0)",(ident,self.uid,str(home/'Retained.mp4'),str(target)))
+        self.assertEqual(self.admin_client.delete('/api/ftp/imports/'+ident+'/source',json={},headers=self.headers).status_code,404)
+        response=self.client.delete('/api/ftp/imports/'+ident+'/source',json={},headers=self.headers);self.assertEqual(response.status_code,200,response.json)
+        self.assertFalse(target.exists());self.assertFalse(self.client.get('/api/ftp').json['imports'][0]['retryable'])

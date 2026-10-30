@@ -4,13 +4,19 @@
   const start = document.querySelector('#rtc-start'), stop = document.querySelector('#rtc-stop');
   const mode = document.body.dataset.mode, slot = document.body.dataset.slot, source = document.body.dataset.source, program = document.body.dataset.program || 'main';
   const csrf = document.querySelector('meta[name="csrf-token"]').content;
-  let pc, media, resource, generation = 0;
+  const audioButton=document.querySelector('#rtc-audio-toggle'),volume=document.querySelector('#rtc-volume');
+  video.volume=.7;
+  function audioControls(){if(!audioButton)return;const audible=!video.muted&&video.volume>0;audioButton.textContent=audible?'Ton ausschalten':'Ton einschalten';audioButton.setAttribute('aria-pressed',String(audible));volume.value=Math.round(video.volume*100);audioButton.disabled=volume.disabled=!pc||video.readyState<2;}
+  audioButton?.addEventListener('click',()=>{const audible=!video.muted&&video.volume>0;if(!video.volume)video.volume=.7;video.muted=audible;video.play().catch(()=>{video.muted=true;message.textContent='Bitte Ton erneut per Klick einschalten.';});audioControls();});
+  volume?.addEventListener('input',()=>{video.volume=Number(volume.value)/100;video.muted=video.volume===0;audioControls();});
+  video.addEventListener('volumechange',audioControls);
+  let pc, media, resource, generation = 0, connectionTimer, requestController;
   async function cleanup() {
-    generation++;
+    generation++;clearTimeout(connectionTimer);requestController?.abort();requestController=null;
     const target = resource;resource = null;
     if (pc) { pc.onconnectionstatechange = null;pc.close();pc = null; }
     if (media) { media.getTracks().forEach(track => track.stop());media = null; }
-    video.srcObject = null;start.disabled = document.body.dataset.enabled !== 'true';stop.disabled = true;
+    video.srcObject = null;audioControls();start.disabled = document.body.dataset.enabled !== 'true';stop.disabled = true;
     if (target) {
       try { await fetch(target,{method:'DELETE',headers:{'X-CSRF-Token':csrf},credentials:'same-origin',keepalive:true}); }
       catch (_) { /* Closing the peer connection also lets MediaMTX expire the session. */ }
@@ -57,9 +63,13 @@
         peer.ontrack = event => stream.addTrack(event.track);
       }
       peer.onconnectionstatechange = () => {
-        if (peer.connectionState === 'connected') message.textContent = mode === 'publish' ? 'Kamera wird gesendet.' : 'Vorschau verbunden. Ton über den Player einschalten.';
-        if (['failed','closed'].includes(peer.connectionState)) { message.textContent = 'Verbindung beendet. WebRTC-Port und Codecs prüfen.';cleanup(); }
+        if (peer.connectionState === 'connected') {
+          if(mode==='publish'){clearTimeout(connectionTimer);message.textContent='Kamera wird gesendet.';}
+          else message.textContent='Medienverbindung steht. Warte auf Bild und Ton …';
+        }
+        if (['failed','closed'].includes(peer.connectionState)) { message.textContent = 'Keine Medienverbindung zum Server. Die Administration muss die öffentliche WebRTC-Adresse und den Medienport prüfen.';cleanup(); }
       };
+      message.textContent='Verbindungsadressen werden ermittelt …';
       await peer.setLocalDescription(await peer.createOffer());
       await new Promise((resolve,reject) => {
         const timer = setTimeout(() => { peer.removeEventListener('icegatheringstatechange',changed);reject(new Error('ICE-Kandidaten konnten nicht rechtzeitig ermittelt werden.')); },10000);
@@ -68,16 +78,22 @@
       });
       if (current !== generation) return;
       const endpoint=source?`/api/webrtc/source/${encodeURIComponent(source)}/${mode}`:`/api/webrtc/${slot}/${mode}?program=${encodeURIComponent(program)}`;
-      const response = await checked(await fetch(endpoint,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/sdp','X-CSRF-Token':csrf},body:peer.localDescription.sdp}));
+      message.textContent='MediaMTX bereitet das Signal vor …';const controller=new AbortController();requestController=controller;
+      const requestTimer=setTimeout(()=>controller.abort(),30000);
+      let response;
+      try{response = await checked(await fetch(endpoint,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/sdp','X-CSRF-Token':csrf},body:peer.localDescription.sdp,signal:controller.signal}));}finally{clearTimeout(requestTimer);}
       const location = response.headers.get('Location');
       if (current !== generation) { if (location) fetch(location,{method:'DELETE',headers:{'X-CSRF-Token':csrf},keepalive:true});return; }
       resource = location;
       await peer.setRemoteDescription({type:'answer',sdp:await response.text()});
+      message.textContent='Signal freigegeben. Medienverbindung wird hergestellt …';
+      connectionTimer=setTimeout(()=>{if(current!==generation||mode==='publish'&&peer.connectionState==='connected'||mode==='play'&&video.readyState>=2)return;message.textContent=peer.connectionState==='connected'?'Medienverbindung steht, aber es kommen keine Videodaten an. Playlist- und Programmstatus prüfen.':'Die Medienverbindung ist nicht erreichbar. Die Administration muss die öffentliche WebRTC-Adresse und den UDP-/TCP-Medienport prüfen; die Webadresse allein genügt nicht.';cleanup();},15000);
       video.play().catch(() => {});
     } catch (error) {
-      if (current === generation) { message.textContent = error.name === 'NotAllowedError' ? 'Zugriff auf Kamera oder Mikrofon wurde nicht erlaubt.' : error.message;await cleanup(); }
+      if (current === generation) { message.textContent = error.name === 'NotAllowedError' ? 'Zugriff auf Kamera oder Mikrofon wurde nicht erlaubt.' : error.name==='AbortError'?'MediaMTX hat die Verbindungsanfrage nicht rechtzeitig beantwortet. Programmstatus und Vorschauprozess prüfen.':error.message;await cleanup(); }
     }
   });
+  video.addEventListener('playing',()=>{audioControls();if(mode==='play'&&pc){clearTimeout(connectionTimer);message.textContent='Vorschau verbunden. Ton über den Player einschalten.';}});
   stop.addEventListener('click',() => { message.textContent = 'Verbindung beendet.';cleanup(); });
   const check = setInterval(async () => {
     try {

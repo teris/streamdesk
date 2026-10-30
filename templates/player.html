@@ -10,8 +10,9 @@
     <script src="/static/player.js?v={{app_version}}&amp;b={{asset_build}}" defer></script>
 </head>
 
-<body><video controls autoplay muted playsinline></video>
-    <p id="message">{{'Warte auf Live-Programm …' if viewer else 'Warte auf Quelle …'}}</p>
+<body data-switch-text="{{switch_text|default('Synchronisation')}}"><video controls autoplay muted playsinline></video>
+    <div id="player-audio" class="player-audio" aria-label="Vorschauton"><button id="player-audio-toggle" type="button" aria-pressed="false">Ton einschalten</button><label>Lautstärke <input id="player-volume" type="range" min="0" max="100" value="70"></label><span id="player-audio-status" role="status">Vorschau ist stumm.</span></div>
+    <p id="message">{{switch_text|default('Synchronisation')}}</p>
 </body>
 
 </html>

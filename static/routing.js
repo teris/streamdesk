@@ -21,7 +21,7 @@
     const current=data.programs?.find(row=>row.id===pid),preview=find('#source3 iframe'),toggle=find('#source3 .preview-toggle');
     const url=current?.preview_url||data.public_url+'/program/main/';
     find('#program-link').value=url;find('#program-link-open').href=url;
-    const pl=current?.playlist;if(find('#program-playout'))find('#program-playout').textContent=pl?.active?'▷ '+pl.name+' · '+pl.video+' · Position '+Math.floor(pl.offset)+' s':pl?.paused?'Live hat Vorrang · '+pl.name+' pausiert':pl?.error||'';
+    const pl=current?.playlist;if(find('#program-playout'))find('#program-playout').textContent=pl?.preparing?'Playlist wird vorbereitet · '+pl.name:pl?.active?'▷ '+pl.name+' · '+pl.video+' · Position '+Math.floor(pl.offset)+' s':pl?.paused?'Live hat Vorrang · '+pl.name+' pausiert':pl?.error||'';
     find('#program-webrtc-open').href=current?.webrtc_url||data.public_url+'/webrtc/3/play/';
     find('#program-webrtc-open').hidden=!data.expert_mode;
     find('#program-route').textContent='Priorität: '+chain(current?.sources||['source1','source2'])+(current?.sources?.length?' → Offline-Video':'');
@@ -32,6 +32,7 @@
     const relative='/program/'+pid+'/';
     if(!preview.hidden&&preview.getAttribute('src')!==relative)preview.src=relative;
     if(preview.hidden&&preview.getAttribute('src')!=='about:blank')preview.src='about:blank';
+    window.StreamDeskPreviewAudio?.sync();
     toggle.disabled=!available;toggle.textContent=!available?'Vorschau wird vorbereitet':programPreviewWanted?'Vorschau schließen':'Vorschau öffnen';
     find('#source3 .placeholder p').textContent=available?'Vorschau geschlossen':'Das Programm wird vorbereitet.';
     find('#program-hint').textContent='Ausgewählt: '+(target?.label||'Standardprogramm')+'. '+(current?.sources?.length?'Auch ohne gestartetes Streamingziel verfügbar.':'Diesem Ausgang zuerst im Expertenmodus Quellen zuordnen.');

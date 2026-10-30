@@ -40,6 +40,11 @@ def main():
     shutil.copy2(config_file, backup / 'mediamtx.yml')
     shutil.copy2(env_file, backup / 'streamdesk.env')
     subprocess.run(['systemctl', 'disable', '--now', args.service_name], check=True)
+    for suffix in ('-ftp','-ftp-auth'):
+        unit=Path('/etc/systemd/system/'+args.service_name+suffix+'.service')
+        if unit.exists():
+            subprocess.run(['systemctl','disable','--now',args.service_name+suffix],check=True)
+            unit.unlink()
     config = yaml.safe_load(config_file.read_text())
     prefix = namespace + '/'
     config['paths'] = {name: value for name, value in config.get('paths', {}).items() if not str(name).startswith(prefix)}

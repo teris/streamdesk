@@ -98,16 +98,16 @@ Der Kontotest nutzt Chromium mit virtuellem WebAuthn-Authenticator auf `localhos
 
 Jedes neue ausgelieferte Updatepaket erhält eine höhere Versionsnummer. Ein bereits geliefertes Paket wird nicht mit geänderten Funktionen unter derselben Versionsnummer ersetzt. Vor dem Packen VERSION erhöhen, neue Änderungen in einem eigenen CHANGELOG-Abschnitt erfassen und README sowie Installationsbeispiele angleichen. Anwendung und Installer lesen ihre Versionsnummer aus VERSION; Browsertests verwenden dieselbe Quelle.
 
-## Playlist-Integrationstest ab 1.1.7
+## Studio-/Playlist-Integrationstest ab 2.0.0-rc1
 
 ```bash
-.venv/bin/python tests/playlists_smoke.py \
+.venv/bin/python tests/studio_smoke.py \
   --mediamtx /pfad/zu/mediamtx \
   --ffmpeg /pfad/zu/ffmpeg \
   --ffprobe /pfad/zu/ffprobe
 ```
 
-Prüft echte Dauerschleifen, unterschiedliche Bilder an zwei lokalen Ausgängen, Source-1/2-Vorrang, gespeichertes Fortsetzen, durchgehende Aufnahme, zeitgesteuerten Start/Stopp, manuelle Stopps sowie Ordner-/Playlist-Oberfläche und Mobilansicht. Alle Ziele sind Loopback-Senken, keine öffentlichen Streamingkonten.
+Prüft einen gemeinsamen Source-2-Playlist-Encoder für zwei verschieden geroutete lokale Ausgänge, die tatsächlich eingeblendete Wiederholungskennzeichnung, geplanten Ausgangsstart ohne Anmeldung/Live-Eingang, Source-1/2-Vorrang, gespeichertes Fortsetzen und eine durchgehende dekodierbare Aufnahme. Zusätzlich: Zeitfensterende, echte FTP-Dateiumwandlung, Massen-Auswahl, Playlist-Bearbeitung/-Löschung, sofort nutzbarer Planer, grafische Wochen-/Tagesansicht, dauerhafte Expertenwahl und Mobilansichten. FFmpeg benötigt libx264, AAC und drawtext mit DejaVu-Schriften. `playlists_smoke.py` bleibt ein kompatibler Aufruf für diesen aktuellen Test. Alle Streamingziele sind temporäre Loopback-Senken.
 
 ## Upload- und Medienverwaltung ab 1.1.8
 
@@ -116,3 +116,33 @@ Prüft echte Dauerschleifen, unterschiedliche Bilder an zwei lokalen Ausgängen,
 ```
 
 Der Chromium-Test drosselt die lokale Upload-Verbindung und prüft Mehrfachauswahl, Upload-/Encoderfortschritt, Menüwechsel während der Warteschlange, Weiterverarbeitung nach fehlerhaftem Video, Umbenennen in beiden Bibliotheken, bestätigtes Entfernen von Playlist-Verweisen, geschützte Dateien und Mobilansichten. Es werden ausschließlich lokale Testdateien verwendet.
+
+
+## Isolierter echter FTPS-Test
+
+```bash
+sudo .venv/bin/python tests/ftp_smoke.py \
+  --pure-ftpd /pfad/zu/pure-ftpd --pure-authd /pfad/zu/pure-authd \
+  --ffmpeg /pfad/zu/ffmpeg --ffprobe /pfad/zu/ffprobe \
+  --uid 1000 --gid 1000
+```
+
+Nur in einer lokalen Testumgebung ausführen; UID/GID müssen ein vorhandenes unprivilegiertes Testkonto bezeichnen. Der Test startet eigene Pure-FTPd-Prozesse auf einem freien Loopback-Port und verwendet temporäre Konten/Dateien. Er prüft FTPS-Pflicht, Chroot, Upload in Unterordner, automatische Umwandlung, Passwortwechsel und gesperrte Zugänge. Es werden keine systemd-Dienste installiert oder öffentliche Konten verwendet. Root ist ausschließlich für Chroot und den Identitätswechsel dieser Testprozesse nötig.
+
+
+## Bibliothek und FTP-Oberfläche ab rc2
+
+```bash
+.venv/bin/python tests/library_ui_smoke.py
+.venv/bin/python tests/ftp_ui_smoke.py
+.venv/bin/python tests/studio_smoke.py --legacy --mediamtx /pfad/zu/mediamtx --ffmpeg /pfad/zu/ffmpeg --ffprobe /pfad/zu/ffprobe
+```
+
+Der Bibliothekstest prüft getrennte Medien-/Playlist-Ansichten, gefilterte Video-Mehrfachauswahl, vorhandene verschachtelte Playlists, erhaltene Entwürfe, Seitenaufteilung und 100 Ordner mit mehr als 600 Videos. Der FTP-Oberflächentest prüft tatsächliches Speichern, Ingest-Verbindungsdaten, bestehende Freigaben und die persönliche Passwortverwaltung unter „Mein Konto“. `--screenshots-dir /zielordner` speichert Vorschauen. Der Studio-Test verwendet hörbaren Testton, zwei lokale RTMP-Senken und tatsächlich dekodiertes Browser-WebRTC-Audio; `--legacy` prüft zusätzlich das alte Pfadschema ohne Benutzerpräfix. Die FTPS-Prüfung umfasst sichtbare Web-Uploads, Uploads direkt in die Bibliotheksordner, erhaltene unvollständige Uploads, automatische Umbenennung bei Dateikollisionen und geschützte fertige Videodateien.
+
+
+Für den anspruchsvolleren Playlist-/Vorschautest zusätzlich `--complex` verwenden. Die lokale Prüfung verwendet bewegte Rauschbilder, echten dekodierten Testton und die sichtbaren Tonregler. Ohne eine pauschale Autoplay-Freigabe wird der Ton per Benutzerklick aktiviert. Die Audio-Messung liest einen aufgenommenen Browser-Medienstrom, ohne den normalen Wiedergabeweg umzuleiten. `program_smoke.py` prüft die Tonbedienung auch bei deaktiviertem Expertenmodus und neue Videoframes nach Quellenwechseln.
+
+`--startup-delay 8` verzögert im Studio-Test ausschließlich den gemeinsamen Playlist-Encoder. Der Test bestätigt, dass derselbe Prozess die frühere Fünf-Sekunden-Grenze überlebt, der Controller weiterhin reagiert und anschließend Bild/Ton an beiden Senken ankommen. Die RTMP-Verbindungen müssen bei Live-Übernahme und Playlist-Fortsetzung erhalten bleiben.
+
+`tests/playlist_resume_smoke.py --mediamtx /pfad/zu/mediamtx --ffmpeg /pfad/zu/ffmpeg --ffprobe /pfad/zu/ffprobe` prüft den in rc5 behobenen Einstieg am Ende einer etwa 49 Minuten langen Playlist. Fünf lokale Dateien und der konkrete Fortsetzpunkt bilden den Fehler nach. Der Test erwartet tatsächlich steigende RTSP-Datenzähler, hörbaren PCM-Ton und denselben Publisher über mehr als zehn Sekunden; eine bloße Pfadanmeldung oder ein einzelner Frame genügt nicht. Diesen Test insbesondere mit FFmpeg 7.1.x ausführen.

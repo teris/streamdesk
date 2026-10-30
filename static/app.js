@@ -26,8 +26,10 @@ const rateHistory = {receive:[], send:[]};
 const viewInfo = {
   dashboard:['ÜBERSICHT','Dein Stream auf einen Blick.','Signal, Sendezeit und Medien – alles an einem Ort.','Dashboard'],
   sources:['LIVE-EINGÄNGE','Deine Quellen.','Live-Eingänge, Vorschau und aktuelle Quellensteuerung.','Quellen'],
-  playlists:['MEDIENBIBLIOTHEK','Deine Playlists.','Ordner, Videos und eigene Dauerschleifen getrennt verwalten.','Playlists'],
-  'expert-playlists':['EXPERTENMODUS','Playlist-Ausspielung.','Fallback, Verzögerung und Zeitpläne für Quellen und Ausgänge.','Playlist-Ausspielung'],
+  planner:['SENDEPLAN','Dein Planer.','Wöchentliche Sendezeiten, Playlist und Anbieter für den automatischen Start.','Planer'],
+  media:['MEDIENVERWALTUNG','Deine Medien.','Videodateien, Ordner und Uploads verwalten.','Medien'],
+  playlists:['PLAYLISTVERWALTUNG','Deine Playlists.','Playlists benennen, zusammenstellen und ihre Reihenfolge verwalten.','Playlists'],
+  'expert-playlists':['EXPERTENMODUS','Playlist-Ausspielung.','Gemeinsame Source-2-Playlist, Fallback und grafischer Wochenplan.','Playlist-Ausspielung'],
   videos:['MEDIENBIBLIOTHEK','Deine Offline-Videos.','Videos auswählen, hochladen und mit Overlays gestalten.','Offline-Videos'],
   recordings:['AUFNAHMEBIBLIOTHEK','Aufnehmen & Wiederholen.','Deine Aufnahmen speichern, herunterladen und manuell als Source 1 zuschalten.','Aufnahmen'],
   chat:['GEMEINSAMER LIVE-CHAT','Deine Chats an einem Ort.','Twitch und YouTube lesen, gezielt schreiben und als Widget einbinden.','Chat & Widget'],
@@ -47,6 +49,7 @@ const viewInfo = {
   'expert-renewal':['EXPERTENMODUS','Neuverbindung.','Verbindungsintervalle und manuelle Neuverbindung.','Neuverbindung'],
   'expert-automation':['EXPERTENMODUS','Automation & Export.','Hooks, Zeitpläne, Exporte und Benachrichtigungen verwalten.','Automation & Export'],
   'expert-discord':['EXPERTENMODUS','Discord-Bot.','Bot Schritt für Schritt erstellen und mit deinem Chat verbinden.','Discord-Bot'],
+  'administration-ftp':['VERWALTUNG','FTP-Zugänge.','Zugänge je Benutzer verwalten und vollständige Verbindungsdaten anzeigen.','FTP-Zugänge'],
   'administration-services':['VERWALTUNG','Dienste & Freigaben.','Dienste zentral für alle Benutzer sperren oder wieder freigeben.','Dienste & Freigaben'],
   administration:['VERWALTUNG','Administration.','Benutzer und die gemeinsame Twitch-App verwalten.','Administration']
 };

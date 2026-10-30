@@ -5,6 +5,7 @@ import hmac
 import ipaddress
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import re
@@ -55,7 +56,6 @@ BROWSER_USER = os.getenv('STREAMDESK_BROWSER_USER', 'streamdesk-browser')
 TRUST_PROXY = os.getenv('STREAMDESK_TRUST_PROXY', '0') == '1'
 TWITCH = 'rtmps://ingest.global-contribute.live-video.net/app'
 STANDBY_TRACKS = [{'codec': 'H264'}, {'codec': 'MPEG4Audio', 'sampleRate': 48000, 'channelCount': 2}]
-UPLOAD_LIMIT = 500 * 1024 * 1024
 UPLOAD_RESERVATIONS = {}
 TEXT_DEFAULTS = {'x': 50, 'y': 93, 'size': 42, 'color': '#ffffff', 'background': '#000000', 'opacity': 65, 'bold': False, 'box': True}
 RENEW_INTERVALS = {0, 300, 600, 1800, 43200, 86400, 129600, 172800}
@@ -314,15 +314,17 @@ def reconcile():
                 name = user['prefix']+legacy
                 if legacy not in {row['key'] for row in catalog} and name in all_paths:
                     del all_paths[name];obsolete.append(name)
+            all_paths[user['prefix']+'playlist-source2']={'source':'publisher','overridePublisher':False,'alwaysAvailable':False,'record':False}
             all_paths[user['prefix']+'replay'] = {'source':'publisher','overridePublisher':False,'alwaysAvailable':False,'record':False}
             # Each membership set has a stable program path. Identical routes share one encoder.
             for program in programs:
                 enabled = bool(user['active']) and program['active']
                 settings = all_paths.setdefault(program['path'], {})
                 settings.update(source='publisher',overridePublisher=False,alwaysAvailable=enabled,
-                                alwaysAvailableFile=native_standby_file(user) if policy['native_standby'] and enabled else '',
+                                alwaysAvailableFile=(native_standby_file(user) if policy['native_standby'] else STUDIO.switch_file(user)) if enabled and 'STUDIO' in globals() else '',
                                 alwaysAvailableTracks=STANDBY_TRACKS,
                                 alwaysAvailableRecorded=True,forward=[])
+                settings['alwaysAvailableTracks']=[] if settings['alwaysAvailableFile'] else STANDBY_TRACKS
                 settings.setdefault('record',False)
                 if not enabled:
                     settings['record'] = False
@@ -354,7 +356,7 @@ def reconcile():
                                 rtspTransport='tcp',alwaysAvailable=False,record=False,forward=targets)
                 all_paths[name] = outgoing
         SERVICES.mask_config(config, managed_auth)
-        merge_auth(config,NAMESPACE,managed_auth,LOCAL_IPS)
+        merge_auth(config,NAMESPACE,managed_auth,LOCAL_IPS,owned_paths=owned_legacy_paths())
         atomic(CONFIG,yaml.safe_dump(config,sort_keys=False,allow_unicode=True))
         SERVICES.reconciled()
         if os.getenv('STREAMDESK_ENGINE','1')=='1':
@@ -366,9 +368,24 @@ def reconcile():
         return True
 
 
+def owned_legacy_paths(obsolete_paths=()):
+    """Explicit DB-owned legacy paths; never treat an empty prefix as a namespace."""
+    result=set()
+    for user in rows('SELECT * FROM users'):
+        prefix=user['prefix']
+        if prefix.startswith(NAMESPACE+'/'):continue
+        result.update(prefix+row['key'] for row in MODEL.sources(user,archived=True))
+        result.update((prefix+'replay',prefix+'playlist-source2'))
+        result.update(output_path(user,kind) for kind in output_kinds(user))
+        for program in MODEL.programs(user,archived=True):result.update((program['path'],program['rtc_path']))
+        for name in obsolete_paths:
+            if name in (prefix+'source3',prefix+'pull') or name.startswith(prefix+'output-') and valid_output_kind(name[len(prefix+'output-'):]):result.add(name)
+    return result
+
+
 def sync_media_runtime(obsolete_paths=()):
     from media_config import synchronize_runtime
-    synchronize_runtime(mtx,yaml.safe_load(CONFIG.read_text()),NAMESPACE,obsolete_paths=obsolete_paths)
+    synchronize_runtime(mtx,yaml.safe_load(CONFIG.read_text()),NAMESPACE,obsolete_paths=obsolete_paths,owned_paths=owned_legacy_paths(obsolete_paths))
 
 
 def initialize():
@@ -454,6 +471,10 @@ def initialize():
     migrate(sys.modules[__name__])
     from upload_features import migrate as migrate_uploads
     migrate_uploads(sys.modules[__name__])
+    from studio_features import migrate as migrate_studio
+    migrate_studio(sys.modules[__name__])
+    from ftp_features import migrate as migrate_ftp
+    migrate_ftp(sys.modules[__name__])
 
 
 def add_user(username, password, admin=False, legacy=False):
@@ -558,7 +579,7 @@ def handle_error(error):
 
 @app.errorhandler(413)
 def too_large(_):
-    return jsonify(error='Die Datei ist zu groß. Maximal 500 MB.'), 413
+    return jsonify(error='Die Anfrage enthält zu viele oder zu große Formularfelder. Videodateien haben keine feste Größenbegrenzung.'), 413
 
 
 ATTEMPTS = {}
@@ -617,7 +638,7 @@ def login():
             hashed = found[0]['password'] if found else _DUMMY_PASSWORD_HASH
             if found and check_password_hash(hashed, password):
                 session.clear()
-                session.update(uid=found[0]['id'], version=found[0]['version'], csrf=secrets.token_urlsafe(32))
+                session.update(uid=found[0]['id'], version=found[0]['version'], csrf=secrets.token_urlsafe(32), expert_mode=bool(found[0]['expert_preference']))
                 return redirect('/')
             with LOCK:
                 for key in keys:
@@ -782,7 +803,7 @@ def status(user):
             oauth_ready=bool(setting('client_id') and setting('client_secret')),
             twitch_edit_ready=bool(rows('SELECT user_id FROM twitch_auth WHERE user_id=?',(user['id'],))),
             upload=UPLOADS.summary(user),
-            limits={'browser_limit':browser_capacity(),'browser_fps':browser_fps(),'upload_mb':500},public_url=PUBLIC)
+            limits={'browser_limit':browser_capacity(),'browser_fps':browser_fps(),'upload_mb':None},public_url=PUBLIC)
 
 
 def source_ingest(user, key):
@@ -909,7 +930,7 @@ def forward(user, enable, kind=None, origin="manual"):
                             if k != kind and SERVICES.output_allowed(k) and before[output_path(user, k)]}, **endpoints}
         if len(endpoints) != len(set(endpoints.values())):
             raise Error('Dasselbe Streamingziel ist mehrfach ausgewählt.')
-        changes = {live: {'forward': [], 'alwaysAvailable': bool(user['active']), 'alwaysAvailableFile': '', 'alwaysAvailableTracks': STANDBY_TRACKS}}
+        changes = {live: {'forward': [], 'alwaysAvailable': bool(user['active']), 'alwaysAvailableFile': STUDIO.switch_file(user), 'alwaysAvailableTracks': [] if STUDIO.switch_file(user) else STANDBY_TRACKS}}
         for output_kind in output_kinds(user) if kind is None else (kind,):
             changes[output_path(user, output_kind)] = {'forward': [{'dest': endpoints[output_kind]}] if output_kind in endpoints else [],
                                                      'source': RTSP + MODEL.output_program(user,output_kind)['path'] if output_kind in endpoints else 'publisher'}
@@ -934,6 +955,7 @@ def forward(user, enable, kind=None, origin="manual"):
         write('UPDATE users SET renew_next=0,renew_resume=0 WHERE id=?', (user['id'],))
         if origin == 'manual':
             PLAYLISTS.manual_control(user, kind)
+            STUDIO.manual_control(user, kind)
 
 
 @app.post('/api/start')
@@ -1208,7 +1230,7 @@ def password(user):
     return jsonify(ok=True)
 
 
-def convert(uid, upload, display_name, max_duration=300, folder_id=None, upload_id=None):
+def convert(uid, upload, display_name, folder_id=None, upload_id=None):
     user = rows('SELECT * FROM users WHERE id=?', (uid,))[0]
     destination = Path(user['offline']).parent / ('offline-' + secrets.token_hex(8) + '.mp4')
     try:
@@ -1217,14 +1239,12 @@ def convert(uid, upload, display_name, max_duration=300, folder_id=None, upload_
         probe = subprocess.run(['ffprobe', '-v', 'error', '-protocol_whitelist', 'file,pipe', '-show_format', '-show_streams', '-of', 'json', str(upload)],
                                capture_output=True, timeout=20, text=True)
         meta = json.loads(probe.stdout)
-        if not any(x.get('codec_type') == 'video' for x in meta['streams']) or not 0 < float(meta['format']['duration']) <= max_duration:
-            raise Error(f'Das Video muss eine Videospur enthalten und höchstens {max_duration//60} Minuten lang sein.')
         duration = float(meta['format']['duration'])
+        if not any(x.get('codec_type') == 'video' for x in meta['streams']) or not math.isfinite(duration) or duration<=0:
+            raise Error('Das Video muss eine lesbare Videospur und eine gültige positive Laufzeit enthalten.')
         with LOCK:
             estimate = int(duration * 650000)
-            others = sum(value for key,value in UPLOAD_RESERVATIONS.items() if key != uid)
-            if shutil.disk_usage(DATA).free - others < estimate + 350*1048576:
-                raise Error('Für die umgewandelte Videodatei ist zu wenig Speicher verfügbar.')
+            require_upload_space(sys.modules[__name__],estimate,excluding=uid)
             UPLOAD_RESERVATIONS[uid] = estimate
         audio = '0:a:0' if any(x.get('codec_type') == 'audio' for x in meta['streams']) else '1:a:0'
         UPLOADS.update(upload_id,uid,'processing',0,'Video wird umgewandelt.')
@@ -1234,7 +1254,7 @@ def convert(uid, upload, display_name, max_duration=300, folder_id=None, upload_
                    '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'zerolatency', '-threads', '1', '-profile:v', 'high', '-pix_fmt', 'yuv420p',
                    '-b:v', '4500k', '-maxrate', '4500k', '-bufsize', '9000k', '-g', '60', '-keyint_min', '60', '-sc_threshold', '0',
                    '-c:a', 'aac', '-b:a', '160k', '-ar', '48000', '-ac', '2', '-shortest', '-movflags', '+faststart', str(destination)]
-        UPLOADS.encode(command,uid,upload_id,duration,max(600,min(30000,int(duration*4+120))))
+        UPLOADS.encode(command,uid,upload_id,duration)
         with LOCK, db() as connection:
             folder = folder_id if connection.execute('SELECT id FROM playlist_folders WHERE id=? AND user_id=?',(folder_id,uid)).fetchone() else None
             video_id = connection.execute('INSERT INTO videos(user_id,name,path,duration,size,created,folder_id) VALUES (?,?,?,?,?,?,?)',
@@ -1246,7 +1266,12 @@ def convert(uid, upload, display_name, max_duration=300, folder_id=None, upload_
         UPLOADS.update(upload_id,uid,'error',0,str(exc) if isinstance(exc, Error) else 'Video konnte nicht verarbeitet werden.')
         write("UPDATE users SET upload_state='error',upload_message=? WHERE id=?", (str(exc) if isinstance(exc, Error) else 'Video konnte nicht verarbeitet werden.', uid))
     finally:
-        upload.unlink(missing_ok=True)
+        # Retain failed FTP inputs privately so a retry needs no new transfer.
+        ftp_job=rows('SELECT id FROM ftp_imports WHERE user_id=? AND upload_id=?',(uid,upload_id)) if upload_id else []
+        ready=rows('SELECT state FROM video_uploads WHERE id=? AND user_id=?',(upload_id,uid)) if upload_id else []
+        if not ftp_job or ready and ready[0]['state']=='ready':
+            upload.unlink(missing_ok=True)
+            if ftp_job:write("UPDATE ftp_imports SET staging='' WHERE id=?",(ftp_job[0]['id'],))
         with LOCK:
             current_job=rows('SELECT upload_id FROM users WHERE id=?',(uid,))
             if not upload_id or current_job and current_job[0]['upload_id']==upload_id:
@@ -1259,19 +1284,16 @@ def upload(user):
     return accept_upload(user)
 
 
-def accept_upload(user, max_duration=300, folder_id=None):
+def accept_upload(user, folder_id=None, kind='offline'):
     file = request.files.get('video')
     if not file or not file.filename.lower().endswith('.mp4'):
         raise Error('Bitte eine MP4-Datei auswählen.')
     file.stream.seek(0, 2)
     incoming_size = file.stream.tell()
     file.stream.seek(0)
-    if incoming_size > UPLOAD_LIMIT:
-        raise Error('Maximal 500 MB pro Datei.')
     upload_id = request.form.get('upload_id') or secrets.token_urlsafe(24)
     if not re.fullmatch(r'[A-Za-z0-9_-]{16,80}',upload_id):raise Error('Ungültige Upload-Kennung.')
     name = ''.join(char if char.isprintable() else ' ' for char in Path(file.filename).name)[:120].strip() or 'Video.mp4'
-    kind = 'playlist' if max_duration>300 else 'offline'
     with LOCK:
         repeated=rows('SELECT * FROM video_uploads WHERE id=?',(upload_id,))
         if repeated:
@@ -1285,12 +1307,11 @@ def accept_upload(user, max_duration=300, folder_id=None):
             return jsonify(error='Dein vorheriges Video wird noch verarbeitet.',code='upload_busy'),409
         if len(rows("SELECT id FROM users WHERE upload_state IN ('queued','processing')")) >= 2:
             return jsonify(error='Der Server verarbeitet bereits zwei Videos. Bitte kurz warten.',code='upload_busy'),429
-        if shutil.disk_usage(DATA).free - sum(UPLOAD_RESERVATIONS.values()) < incoming_size + 350 * 1024 * 1024:
-            raise Error('Auf dem Server ist zu wenig freier Speicher.')
+        require_upload_space(sys.modules[__name__])
         try:
             UPLOADS.register(user,upload_id,name,incoming_size,kind,folder_id)
             write("UPDATE users SET upload_state='queued',upload_message='Upload wird empfangen …',upload_id=? WHERE id=?", (upload_id,user['id']))
-            UPLOAD_RESERVATIONS[user['id']] = incoming_size
+            UPLOAD_RESERVATIONS[user['id']] = 0
         except Exception:
             UPLOADS.update(upload_id,user['id'],'error',0,'Upload konnte nicht vorbereitet werden.')
             raise
@@ -1299,14 +1320,12 @@ def accept_upload(user, max_duration=300, folder_id=None):
     submitted = False
     try:
         directory.mkdir(exist_ok=True)
-        file.save(target)
-        if target.stat().st_size > UPLOAD_LIMIT:
-            raise Error('Maximal 500 MB pro Datei.')
-        write("UPDATE users SET upload_state='queued',upload_message='Video wartet auf Verarbeitung …' WHERE id=?", (user['id'],))
-        if max_duration != 300 or folder_id is not None:
-            JOBS.submit(convert, user['id'], target, name, max_duration, folder_id, upload_id=upload_id)
+        if isinstance(file.stream,StagedVideoUpload):file.stream.promote(target)
         else:
-            JOBS.submit(convert, user['id'], target, name, upload_id=upload_id)
+            with LOCK:require_upload_space(sys.modules[__name__],incoming_size)
+            file.save(target)
+        write("UPDATE users SET upload_state='queued',upload_message='Video wartet auf Verarbeitung …' WHERE id=?", (user['id'],))
+        JOBS.submit(convert, user['id'], target, name, folder_id, upload_id=upload_id)
         submitted = True
     except Exception:
         target.unlink(missing_ok=True)
@@ -1820,7 +1839,7 @@ def oauth_start(user):
     session['oauth'] = {'state': state, 'time': time.time(), 'uid': user['id']}
     return redirect('https://id.twitch.tv/oauth2/authorize?' + urllib.parse.urlencode({
         'client_id': client, 'redirect_uri': PUBLIC + '/oauth/twitch/callback', 'response_type': 'code',
-        'scope': ' '.join(sorted(TWITCH_SCOPES | CHAT_SCOPES)), 'state': state, 'force_verify': 'true'}))
+        'scope': ' '.join(sorted(TWITCH_SCOPES | CHAT_SCOPES | {'channel:manage:schedule'})), 'state': state, 'force_verify': 'true'}))
 
 
 @app.get('/oauth/twitch/callback')
@@ -1893,7 +1912,7 @@ def hls_asset(user,path,asset):
 @login_required
 def player(user,slot):
     preview_path(user,slot)
-    return render_template('player.html',slot=slot)
+    return render_template('player.html',slot=slot,switch_text=user['switch_text'])
 
 
 @app.get('/preview/<int:slot>/<asset>')
@@ -1906,7 +1925,7 @@ def preview(user,slot,asset):
 @login_required
 def source_player(user,key):
     MODEL.source(user,key)
-    return render_template('player.html')
+    return render_template('player.html',switch_text=user['switch_text'])
 
 
 @app.get('/preview/source/<key>/<asset>')
@@ -1921,7 +1940,7 @@ def source_preview(user,key,asset):
 @login_required
 def program_player(user,pid):
     MODEL.program(user,pid)
-    return render_template('player.html')
+    return render_template('player.html',switch_text=user['switch_text'])
 
 
 @app.get('/program/<pid>/<asset>')
@@ -2217,6 +2236,7 @@ class Engine:
         local_demand = bool(live.get('readers')) or bool(config['paths'].get(program['path'],{}).get('record'))
         active_record = rows("SELECT source FROM recordings WHERE user_id=? AND status='recording'",(user['id'],))
         local_demand = local_demand or any(row['source']==('live' if program['id']=='main' else program['id']) for row in active_record)
+        STUDIO.tick_outputs(user, program, config, now)
         plan, playlist_eligible = PLAYLISTS.decision(user, program, bool(healthy), enabled or local_demand, now)
         PLAYLISTS.automatic(user, program, plan, playlist_eligible, config, now, live=bool(healthy))
         enabled = any(config['paths'].get(output_path(user,kind),{}).get('forward') for kind in program['targets'])
@@ -2228,7 +2248,7 @@ class Engine:
         def choose():
             source = next((name for name in healthy if now>=self.retry.get((key,name),0)),None)
             if source is None and offline_allowed and playlist_eligible:
-                candidate='@playlist:'+str(plan['playlist']['id'])+':'+str(plan['playlist']['revision'])
+                candidate='@playlist:'+str(plan['playlist']['id'])+':'+str(plan['playlist']['revision'])+':'+hashlib.sha256((user['replay_label']+user['replay_corner']).encode()).hexdigest()[:12]
                 if now>=self.retry.get((key,candidate),0):source=candidate
             if source is None and offline_allowed and now>=self.retry.get((key,offline_key),0):
                 source=offline_key
@@ -2241,8 +2261,9 @@ class Engine:
             self.retry[(key,previous[0])] = now+policy['retry_seconds']
             self.stop_relay(key);previous=None
             desired = choose()
-        if (previous[0] if previous else None)!=desired:
-            self.stop_relay(key)
+        pending=PLAYLISTS.jobs.get((user['id'],program['id']),{}).get('preparing',False)
+        if (previous[0] if previous else None)!=desired or pending and desired is None:
+            if previous or not (pending and desired and desired.startswith('@playlist:')):self.stop_relay(key)
             if desired:
                 if desired.startswith('@browser:'):
                     try:
@@ -2258,6 +2279,8 @@ class Engine:
                     progress_args = []
                     if playlist_input:
                         try:input_args, progress_args = PLAYLISTS.start(user, program, plan)
+                        except PlaylistStarting:
+                            return {'id':program['id'],'selected_source':None,'offline_playing':False,'available':bool(live.get('available')),'browser_status':'off','playlist':PLAYLISTS.describe(key,plan,False)}
                         except (Error, OSError):
                             self.retry[(key,desired)] = now+max(5,policy['retry_seconds'])
                             return {'id':program['id'],'selected_source':None,'offline_playing':True,'available':bool(live.get('available')),'browser_status':'off','playlist':{'active':False,'error':'Playlist nicht verfügbar; Offline-Fallback folgt.'}}
@@ -2272,9 +2295,11 @@ class Engine:
                         '-c:v','libx264','-preset','veryfast','-tune','zerolatency','-profile:v','baseline',
                         '-pix_fmt','yuv420p','-bf','0','-g','30','-threads','2','-b:v','4500k','-maxrate','4500k','-bufsize','9000k',
                         '-c:a','aac','-b:a','160k','-ar','48000','-ac','2','-af','aresample=async=1:first_pts=0',
-                        '-shortest','-max_interleave_delta','1000000','-flush_packets','1','-f','rtsp','-rtsp_transport','tcp',RTSP+program['path']]
+                        '-shortest','-max_interleave_delta','1000000','-flush_packets','1','-f','rtsp','-rtsp_transport','tcp','-pkt_size','1200',RTSP+program['path']]
+                    if playlist_input:
+                        command=['ffmpeg','-hide_banner','-nostdin','-loglevel','error']+input_args+['-map','0:v:0','-map','0:a:0','-c:v','copy','-c:a','aac','-b:a','160k','-ar','48000','-ac','2','-af','aresample=async=1','-max_interleave_delta','1000000','-flush_packets','1','-f','rtsp','-rtsp_transport','tcp','-pkt_size','1200',RTSP+program['path']]
                     suffix = '' if program['id']=='main' else '-'+program['id']
-                    with (DATA/f"relay-{user['id']}{suffix}.log").open('wb') as log:
+                    with (DATA/f"relay-{user['id']}{suffix}.log").open('ab') as log:
                         self.relays[key] = (desired,subprocess.Popen(command,stdout=subprocess.DEVNULL,stderr=log))
         current = self.relays.get(key)
         actual = current[0] if current and live.get('online') else None
@@ -2314,6 +2339,8 @@ class Engine:
         for uid in list(self.replays):
             if uid not in active_ids:
                 self.stop_replay(uid)
+        for pending_key in list(PLAYLISTS.jobs):
+            if pending_key[0] not in active_ids:self.stop_relay(relay_key({'id':pending_key[0]},pending_key[1]))
         for key in list(self.relays):
             if relay_owner(key) not in active_ids:
                 self.stop_relay(key)
@@ -2384,6 +2411,9 @@ class Engine:
             program_states = []
             programs = MODEL.programs(user)
             active_keys = {relay_key(user,program['id']) for program in programs}
+            for pending_key in list(PLAYLISTS.jobs):
+                pending_relay=relay_key({'id':pending_key[0]},pending_key[1])
+                if pending_key[0]==uid and pending_relay not in active_keys:self.stop_relay(pending_relay)
             for key in list(self.relays):
                 if relay_owner(key)==uid and key not in active_keys:
                     self.stop_relay(key)
@@ -2420,6 +2450,8 @@ class Engine:
                                       'available': bool(live.get('available')), 'enabled': enabled, 'state': state, 'offline_playing': offline_playing,
                                       'browser_status': browser_status, 'replay_state': replay_state,'programs':program_states}
         FEATURES.automation.tick()
+        STUDIO.tick()
+        FTP.tick()
         READY.set()
 
     def run(self):
@@ -2429,7 +2461,7 @@ class Engine:
             except Exception as exc:
                 logging.warning('MediaMTX-Abgleich fehlgeschlagen (%s).', type(exc).__name__)
                 for uid, relay in list(self.relays.items()):
-                    if relay[0].startswith(('@offline:', '@browser:')):
+                    if relay[0].startswith(('@offline:', '@browser:', '@playlist:')):
                         self.stop_relay(uid)
                 READY.clear()
                 with LOCK:
@@ -2457,13 +2489,19 @@ from integrations import install_integrations
 CHAT = install_integrations(sys.modules[__name__])
 from media_features import MediaFeatures
 FEATURES = MediaFeatures(sys.modules[__name__])
-from playlist_features import PlaylistFeatures
+from playlist_features import PlaylistFeatures, PlaylistStarting
 PLAYLISTS = PlaylistFeatures(sys.modules[__name__])
-from upload_features import UploadFeatures
+from upload_features import UploadFeatures, StagedVideoUpload, install_upload_request, require_space as require_upload_space
+install_upload_request(sys.modules[__name__])
 UPLOADS = UploadFeatures(sys.modules[__name__])
+from studio_features import StudioFeatures
+STUDIO = StudioFeatures(sys.modules[__name__])
+from ftp_features import FTPFeatures
+FTP = FTPFeatures(sys.modules[__name__])
 from account_features import install_account_routes
 install_account_routes(sys.modules[__name__])
 if os.getenv('STREAMDESK_ENGINE', '1') == '1':
+    if FEATURES.native_root.is_dir() and STUDIO.can_switch_video():STUDIO.switch_file({'username':'_default','switch_text':'Synchronisation'},create=True)
     reconcile()
     runtime = BROWSER_ROOT
     if runtime.is_dir():

@@ -259,7 +259,7 @@ class RecoveryTests(unittest.TestCase):
             if fail and url.endswith('/login'):
                 raise RuntimeError('fixture-failed-health-check')
 
-        with patch.object(installer, 'dependencies'), patch.object(installer, 'media_service_identity', return_value=(0, 0)), \
+        with patch.object(installer, 'configure_ftp'), patch.object(installer, 'dependencies'), patch.object(installer, 'media_service_identity', return_value=(0, 0)), \
              patch.object(installer, 'ensure_service_accounts', return_value=(
                  SimpleNamespace(pw_uid=1001, pw_gid=1001), SimpleNamespace(pw_uid=0, pw_gid=0), SimpleNamespace(pw_uid=1002, pw_gid=1002))), \
              patch.object(installer, 'media_config_permissions', return_value=(0o600, (0, 0))), \
@@ -277,7 +277,7 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(self.binary.read_bytes(), b'fixture-existing-media-binary')
         self.assertEqual((self.units / 'mediamtx.service').read_text(), 'fixture-old-mediamtx-unit')
         self.assertFalse(any(command[:2] == ['systemctl', 'stop'] and command[-1] == 'mediamtx' for command, _ in calls))
-        sync = [kwargs for command, kwargs in calls if '-c' in command and 'synchronize_runtime' in command[-1]]
+        sync = [kwargs for command, kwargs in calls if '-c' in command and 'app.sync_media_runtime' in command[-1]]
         self.assertEqual(set(json.loads(sync[0]['input'])), {'streamdesk/alice/source1', 'streamdesk/alice/output'})
         if fail:
             self.assertEqual(self.media.read_bytes(), original_config)
