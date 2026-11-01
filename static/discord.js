@@ -6,7 +6,7 @@
   const channel=find('#discord-channel-id'),token=find('#discord-bot-token');
   form.addEventListener('input',()=>edited=true);
   async function load(force=false){
-    if(!window.StreamDeskServices.allowed('discord')||!expert||loading||(!force&&loaded))return;
+    if(!window.StreamDeskServices?.allowed('discord')||!expert||loading||(!force&&loaded))return;
     loading=true;
     try{
       const data=await api('/api/discord');

@@ -30,7 +30,7 @@
   }
   window.StreamDeskTimeline={render:timeline};
   for(const [id,parent]of[['studio-settings','[data-view="settings-appearance"]'],['ftp-settings','[data-view="account"]'],['admin-ftp-settings','[data-view="administration-ftp"]']]){const element=q('#'+id);if(element&&q(parent))q(parent).append(element);}
-  const form=q('#planner-form');let data,selected=null,dirty=false,loading=false,preferencesLoaded=false,ftpAt=0;
+  const form=q('#planner-form');let data,selected=null,dirty=false,loading=false,preferencesLoaded=false,ftpAt=0,ftpLoading=null,ftpReload=null,ftpSignature='';
   for(let index=0;index<7;index++){const label=make('label',days[index]),input=make('input');input.type='checkbox';input.value=index;input.name='day';label.prepend(input);q('#planner-days').append(label);}
   function reset(){selected=null;dirty=false;form.reset();form.elements.timezone.value='Europe/Berlin';form.querySelector('[name=day][value="0"]').checked=true;q('#planner-editor-title').textContent='Geplanten Stream hinzufügen';if(data)fields();}
   function fields(plan){
@@ -49,7 +49,7 @@
     timeline(q('#planner-timeline'),data.plans.filter(row=>row.enabled),data.playlists,index=>edit(data.plans.filter(row=>row.enabled)[index]));
     if(!dirty){const plan=data.plans.find(row=>row.id===selected);fields(plan);}
   }
-  async function load(preserve=false){if(loading||!window.StreamDeskServices.allowed('automation')||!window.StreamDeskServices.allowed('playlists'))return;loading=true;try{data=await api('/api/planner');render(preserve);}catch(error){notify(error.message,true);}finally{loading=false;}}
+  async function load(preserve=false){if(loading||!window.StreamDeskServices?.allowed('automation')||!window.StreamDeskServices?.allowed('playlists'))return;loading=true;try{data=await api('/api/planner');render(preserve);}catch(error){notify(error.message,true);}finally{loading=false;}}
   form.oninput=()=>dirty=true;
   form.onsubmit=event=>{event.preventDefault();action(async()=>{const body={title:form.elements.title.value,enabled:form.elements.enabled.checked,start:form.elements.start.value,end:form.elements.end.value,timezone:form.elements.timezone.value.trim(),days:[...form.querySelectorAll('[name=day]:checked')].map(input=>Number(input.value)),playlist_id:Number(form.elements.playlist_id.value),targets:[...form.querySelectorAll('[name=target]:checked')].map(input=>input.value),sync_twitch:form.elements.sync_twitch.checked};const result=await api('/api/planner'+(selected?'/'+selected:''),body);selected=result.id;dirty=false;await load();},'Sendeplan gespeichert.',form);};
   q('#planner-new').onclick=reset;q('#planner-cancel').onclick=reset;
@@ -80,19 +80,26 @@
       row.append(make('strong',item.filename),make('p',new Date(item.created*1000).toLocaleString('de-DE')+' · '+size+' · '+({queued:'Wartet',processing:'Wird verarbeitet',ready:'Fertig',error:'Fehler'}[item.state]||item.state),'small'),make('p',item.message,'small muted'));
       if(item.state==='processing'&&item.progress!==null){const progress=make('progress');progress.max=100;progress.value=item.progress;progress.setAttribute('aria-label',item.filename+' Umwandlung');row.append(progress,make('p','Umwandlung: '+Math.round(item.progress)+' %','small'));}
       if(item.state==='ready'&&item.video_id){const link=make('a','Video ansehen ↗');link.href='/media/video/'+item.video_id;link.target='_blank';link.rel='noopener';row.append(link);}
-      if(item.state==='error'&&item.retryable){const retry=make('button','Erneut importieren','secondary');retry.type='button';retry.onclick=()=>action(async()=>{await api('/api/ftp/imports/'+item.id+'/retry',{});await loadFTP();},'FTP-Import erneut eingereiht.',row);row.append(retry);}
-      if(item.state==='error'&&item.retained&&item.retryable){const remove=make('button','Quelldatei löschen','ghost');remove.type='button';remove.onclick=()=>{if(!confirm('Die zurückbehaltene Quelldatei „'+item.filename+'“ löschen und ihren Speicher freigeben?'))return;action(async()=>{await api('/api/ftp/imports/'+item.id+'/source',{},'DELETE');await loadFTP();},'Quelldatei entfernt.',row);};row.append(remove);}
+      if(item.state==='error'&&item.retryable){const retry=make('button','Erneut importieren','secondary');retry.type='button';retry.onclick=()=>action(async()=>{await api('/api/ftp/imports/'+item.id+'/retry',{});await loadFTP(true);},'FTP-Import erneut eingereiht.',row);row.append(retry);}
+      if(item.state==='error'&&item.retained&&item.retryable){const remove=make('button','Quelldatei löschen','ghost');remove.type='button';remove.onclick=()=>{if(!confirm('Die zurückbehaltene Quelldatei „'+item.filename+'“ löschen und ihren Speicher freigeben?'))return;action(async()=>{await api('/api/ftp/imports/'+item.id+'/source',{},'DELETE');await loadFTP(true);},'Quelldatei entfernt.',row);};row.append(remove);}
       list.append(row);
     }
   }
-  async function loadFTP(){
-    if(!window.StreamDeskServices.allowed('ftp'))return;
-    try{const result=await api('/api/ftp');q('#ftp-account-status').textContent=ftpStatus(result);connectionFields(q('#ftp-connection'),result);q('#ftp-password-form').hidden=!result.account;
+  function loadFTP(fresh=false){
+    if(!window.StreamDeskServices?.allowed('ftp'))return;
+    if(ftpLoading){
+      if(!fresh)return ftpLoading;
+      if(!ftpReload)ftpReload=ftpLoading.then(()=>{ftpReload=null;return loadFTP();});
+      return ftpReload;
+    }
+    ftpAt=Date.now();
+    ftpLoading=(async()=>{try{const result=await api('/api/ftp'),signature=JSON.stringify(result);if(signature===ftpSignature)return;ftpSignature=signature;
+      q('#ftp-account-status').textContent=ftpStatus(result);connectionFields(q('#ftp-connection'),result);q('#ftp-password-form').hidden=!result.account;
       for(const container of [q('#ftp-import-list'),q('#media-ftp-import-list')])renderImports(container,result.imports);
       const media=q('#media-ftp-imports');media.hidden=!result.configured||!result.account;
       if(!media.dataset.seen&&result.imports.some(row=>row.state!=='ready')){media.open=true;media.dataset.seen='1';}
-      ftpAt=Date.now();
-    }catch(error){q('#ftp-account-status').textContent=error.message;notify(error.message,true);}
+    }catch(error){ftpSignature='';q('#ftp-account-status').textContent=error.message;notify(error.message,true);}})().finally(()=>{ftpLoading=null;});
+    return ftpLoading;
   }
   q('#ftp-password-form').onsubmit=event=>{event.preventDefault();const f=event.currentTarget;action(async()=>{await api('/api/ftp/password',{password:f.elements.password.value});f.reset();},'FTP-Passwort geändert.',f);};
   const admin=q('#admin-ftp-form');let adminLoading=false,adminRequest=0;
@@ -108,7 +115,7 @@
     catch(error){if(request===adminRequest)q('#admin-ftp-status').textContent=error.message;notify(error.message,true);}
   }
   async function adminFTP(){
-    if(!admin||adminLoading||!window.StreamDeskServices.allowed('ftp'))return;adminLoading=true;
+    if(!admin||adminLoading||!window.StreamDeskServices?.allowed('ftp'))return;adminLoading=true;
     try{const previous=admin.elements.user_id.value,result=await api('/api/admin');admin.elements.user_id.replaceChildren(...result.users.filter(row=>row.role!=='moderator').map(row=>new Option(row.username+(row.active?'':' · deaktiviert'),row.id)));if([...admin.elements.user_id.options].some(option=>option.value===previous))admin.elements.user_id.value=previous;await loadAdminAccount();}
     catch(error){q('#admin-ftp-status').textContent=error.message;notify(error.message,true);}finally{adminLoading=false;}
   }
@@ -116,10 +123,11 @@
     admin.elements.user_id.onchange=()=>{admin.elements.password.value='';admin.querySelector('.form-feedback')?.remove();loadAdminAccount();};
     admin.onsubmit=event=>{
       event.preventDefault();const id=Number(admin.elements.user_id.value);admin.elements.user_id.disabled=true;
-      action(async()=>{const result=await api('/api/admin/users/'+id+'/ftp',{enabled:admin.elements.enabled.checked,password:admin.elements.password.value});admin.elements.password.value='';adminFields(result);await loadFTP();},'FTP-Zugang gespeichert.',admin).finally(()=>{admin.elements.user_id.disabled=false;});
+      action(async()=>{const result=await api('/api/admin/users/'+id+'/ftp',{enabled:admin.elements.enabled.checked,password:admin.elements.password.value});admin.elements.password.value='';adminFields(result);await loadFTP(true);},'FTP-Zugang gespeichert.',admin).finally(()=>{admin.elements.user_id.disabled=false;});
     };
   }
   function view(){if(location.hash==='#planner')load(true);if(location.hash==='#settings-appearance')loadPreferences();if(['#account','#media'].includes(location.hash))loadFTP();if(location.hash==='#administration-ftp')adminFTP();}
   window.addEventListener('hashchange',view);window.addEventListener('DOMContentLoaded',()=>{reset();view();});
-  window.addEventListener('streamdesk:status',()=>{if(['#account','#media'].includes(location.hash)&&Date.now()-ftpAt>10000){ftpAt=Date.now();loadFTP();}});
+  window.addEventListener('streamdesk:services',view);
+  window.addEventListener('streamdesk:status',()=>{if(!document.hidden&&['#account','#media'].includes(location.hash)&&Date.now()-ftpAt>10000)loadFTP();});
 })();

@@ -1,6 +1,10 @@
 # MediaMTX - StreamDesk
 
-**Aktuelle Version: 2.0.0-rc6**
+**Aktuelle Version: 2.0.2**
+
+Ab 2.0.2 fragt der Installer mit `y/n` ausschließlich nach dem Backup. `n` führt das Update ohne neue Sicherung fort; `--no-backup` wählt dies direkt. Details zur Wiederherstellung stehen in der [Installation](INSTALL.md).
+
+2.0.1 behebt Startfehler der Dienstfreigaben und entlastet die Oberfläche bei längerer Nutzung: geschlossene Datenbankverbindungen, zusammengefasste Hintergrundabfragen und Wiederherstellung nach verzögerten Antworten. Details im [Changelog](CHANGELOG.md).
 
 Eine selbst gehostete Mehrbenutzer-Oberfläche für OBS-/Handy-Streams, manuelle Aufnahmen, Offline-Videos, Multistreaming und gemeinsamen Twitch-/YouTube-Chat.
 

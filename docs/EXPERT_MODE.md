@@ -1,4 +1,4 @@
-# Expertenmodus und Medienerweiterungen · 2.0.0-rc6
+# Expertenmodus und Medienerweiterungen · 2.0.2
 
 Den eigenen Menüpunkt **Expertenmodus** öffnen, den Modus aktivieren und **Modus übernehmen** wählen. Die Untermenüs „Protokolle & WebRTC“, „Quellen & Routing“, „Ausgänge & Konten“, „Native Aufnahme“, „Playback“, „Zuschauerfreigabe“, „Neuverbindung“, „Automation & Export“ und „Discord-Bot“ bündeln die technischen Einstellungen. Die normalen Ansichten behalten ihre grundlegenden Funktionen. Die Entscheidung wird pro Benutzer gespeichert und bei einer neuen Passwort-, Passkey- oder Recovery-Anmeldung wiederhergestellt. Andere bereits laufende Sitzungen behalten ihre bisherige Freigabe. Das Backend prüft technische Anfragen zusätzlich zur Sichtbarkeit in der Oberfläche. Ein Administratorkonto umgeht diese Prüfung nicht.
 

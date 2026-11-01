@@ -18,6 +18,9 @@ Die getrennten Plattform-Einstellungen und die Discord-Einrichtung lassen sich o
 .venv/bin/python -m playwright install chromium
 .venv/bin/python tests/settings_smoke.py
 .venv/bin/python tests/services_smoke.py
+.venv/bin/python -m playwright install firefox
+.venv/bin/python tests/ui_resilience_smoke.py --browser chromium
+.venv/bin/python tests/ui_resilience_smoke.py --browser firefox
 ```
 
 Optional schreibt `--screenshots-dir /pfad/zum/vorschauordner` Ansichten mit ausschließlich lokalen Testdaten.

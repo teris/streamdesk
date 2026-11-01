@@ -1,4 +1,4 @@
-# Studio-Update 2.0.0-rc6
+# Studio-Update 2.0.2
 
 ## Eine gemeinsame Playlist über Source 2
 
@@ -52,7 +52,7 @@ Die Wahl des Expertenmodus wird pro Benutzer gespeichert und bei Passwort-, Pass
 
 ## Persönliche FTP-Zugänge
 
-Der native Debian-Installer kündigt die Paketinstallation und FTP-Einrichtung vor der Bestätigung an. Auch mit `--yes` und bei `--dry-run` wird der Hinweis ausgegeben. Er installiert Pure-FTPd und richtet einen eigenen **expliziten FTPS-Dienst auf Port 2121** ein. Vorhandene FTP-Dienste und deren Benutzer bleiben unverändert. Verlangt der Paketmanager die Entfernung eines anderen FTP-Servers, bricht die Installation ab; bei einem solchen Paketkonflikt kann `--disable-ftp` die StreamDesk-Aktualisierung ohne den neuen FTP-Dienst durchführen. Die Authentifizierung läuft über Pure-FTPds [externes Authentifizierungsmodul](https://download.pureftpd.org/pub/pure-ftpd/doc/README.Authentication-Modules); Passwörter werden ausschließlich als Passwort-Hashes gespeichert. Die Webanwendung benötigt keine root-Rechte und führt keine beliebigen Verwaltungsbefehle aus.
+Der native Debian-Installer kündigt die Paketinstallation und FTP-Einrichtung vor der Backup-Wahl an. Auch mit `--yes` und bei `--dry-run` wird der Hinweis ausgegeben. Er installiert Pure-FTPd und richtet einen eigenen **expliziten FTPS-Dienst auf Port 2121** ein. Vorhandene FTP-Dienste und deren Benutzer bleiben unverändert. Verlangt der Paketmanager die Entfernung eines anderen FTP-Servers, bricht die Installation ab; bei einem solchen Paketkonflikt kann `--disable-ftp` die StreamDesk-Aktualisierung ohne den neuen FTP-Dienst durchführen. Die Authentifizierung läuft über Pure-FTPds [externes Authentifizierungsmodul](https://download.pureftpd.org/pub/pure-ftpd/doc/README.Authentication-Modules); Passwörter werden ausschließlich als Passwort-Hashes gespeichert. Die Webanwendung benötigt keine root-Rechte und führt keine beliebigen Verwaltungsbefehle aus.
 
 1. **Administration → FTP-Zugänge je Benutzer:** Benutzer wählen, separates FTP-Passwort festlegen, Zugang freigeben.
 2. **Mein Konto → Dein FTP-Zugang:** Benutzer sieht die Ingest-Domain/IP, Port, Protokoll, passiven Modus und seinen FTP-Benutzernamen. Die kopierbaren Daten und die Verbindungsanleitung bleiben sichtbar. Dort kann er sein eigenes FTP-Passwort ändern.

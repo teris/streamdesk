@@ -208,3 +208,31 @@ class FTPInstallerTests(unittest.TestCase):
             self.assertIn('Pure-FTPd (FTP-Server)',output.getvalue());raise RuntimeError('stop before mutations')
         with patch.object(installer,'parse',return_value=args),patch.object(installer,'validate',return_value={}),patch.object(installer.os,'geteuid',return_value=0),patch.object(installer.Path,'exists',return_value=True),patch.object(installer.Path,'read_text',return_value='ID=debian\nVERSION_ID=13\n'),patch.object(installer.sys.stdin,'isatty',return_value=False),patch.object(installer,'install',side_effect=stop_before_changes),contextlib.redirect_stdout(output):
             with self.assertRaisesRegex(RuntimeError,'stop before mutations'):installer.main([])
+
+    def test_backup_question_accepts_y_or_n_and_repeats_other_answers(self):
+        import contextlib,io
+        for answer,skip in (('y',False),('n',True),('Y',False),(' N ',True)):
+            args=installer.parse([])
+            with self.subTest(answer=answer),patch.object(installer.sys.stdin,'isatty',return_value=True),patch('builtins.input',side_effect=['ja','nein','',answer]) as prompt,contextlib.redirect_stdout(io.StringIO()) as output:
+                installer.choose_backup(args)
+                self.assertEqual(args.no_backup,skip);self.assertEqual(prompt.call_count,4)
+                self.assertIn('[y/n]',prompt.call_args.args[0]);self.assertNotIn('Pure-FTPd',prompt.call_args.args[0])
+                self.assertEqual(output.getvalue().count('Bitte nur y oder n'),3)
+                if skip:self.assertIn('nicht aus diesem Lauf zurückgespielt',output.getvalue())
+
+    def test_noninteractive_default_keeps_backup_and_explicit_skip_does_not_prompt(self):
+        import contextlib,io
+        for command,tty,skip in ((['--yes'],True,False),([],False,False),(['--no-backup'],True,True),(['--yes','--no-backup'],False,True)):
+            args=installer.parse(command)
+            with self.subTest(command=command,tty=tty),patch.object(installer.sys.stdin,'isatty',return_value=tty),patch('builtins.input',side_effect=AssertionError('Unexpected prompt')),contextlib.redirect_stdout(io.StringIO()) as output:
+                installer.choose_backup(args);self.assertEqual(args.no_backup,skip)
+                self.assertEqual('kein Backup erstellt' in output.getvalue(),skip)
+
+    def test_main_continues_update_after_n_and_passes_backup_choice_to_install(self):
+        import contextlib,io
+        for answer in ('y','n'):
+            args=installer.parse(['--mode','update','--ingest-host','ingest.example.test']);args.public_url='https://panel.example.test';args.mediamtx_config=Path('/fixture/media.yml')
+            with self.subTest(answer=answer),patch.object(installer,'parse',return_value=args),patch.object(installer,'validate',return_value={'fixture':'saved'}),patch.object(installer.os,'geteuid',return_value=0),patch.object(installer.Path,'exists',return_value=True),patch.object(installer.Path,'read_text',return_value='ID=debian\nVERSION_ID=13\n'),patch.object(installer.sys.stdin,'isatty',return_value=True),patch('builtins.input',return_value=answer),patch.object(installer,'install') as install,contextlib.redirect_stdout(io.StringIO()) as output:
+                installer.main([])
+                install.assert_called_once_with(args,{'fixture':'saved'})
+                self.assertEqual(args.no_backup,answer=='n');self.assertNotIn('Abgebrochen',output.getvalue())

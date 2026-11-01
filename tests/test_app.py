@@ -51,6 +51,44 @@ class AppTests(unittest.TestCase):
         self.assertIn(':18890?', data['srt'])
         self.assertEqual(data['username'], 'streamdesk_unittest_alice')
 
+    def test_database_context_closes_after_commit_and_rollback(self):
+        key='unit-db-lifecycle'
+        try:
+            with app.db() as connection:
+                connection.execute('INSERT INTO settings(name,value) VALUES (?,?)',(key,'committed'))
+            with self.assertRaises(app.sqlite3.ProgrammingError):connection.execute('SELECT 1')
+            self.assertEqual(app.rows('SELECT value FROM settings WHERE name=?',(key,))[0]['value'],'committed')
+            with self.assertRaisesRegex(RuntimeError,'rollback fixture'):
+                with app.db() as connection:
+                    connection.execute('UPDATE settings SET value=? WHERE name=?',('rolled back',key))
+                    raise RuntimeError('rollback fixture')
+            with self.assertRaises(app.sqlite3.ProgrammingError):connection.execute('SELECT 1')
+            self.assertEqual(app.rows('SELECT value FROM settings WHERE name=?',(key,))[0]['value'],'committed')
+        finally:app.write('DELETE FROM settings WHERE name=?',(key,))
+
+    def test_status_requests_leave_no_database_descriptors_without_garbage_collection(self):
+        import gc
+        def count():
+            total=0
+            for path in Path('/proc/self/fd').iterdir():
+                try:total+=os.readlink(path)==str(app.DATA/'app.db')
+                except OSError:pass
+            return total
+        gc.collect();enabled=gc.isenabled();before=count();gc.disable()
+        try:
+            for _ in range(5):self.assertEqual(self.client.get('/api/status').status_code,200)
+            self.assertEqual(count(),before)
+        finally:
+            if enabled:gc.enable()
+            gc.collect()
+
+    def test_service_bootstrap_precedes_consumers_with_strict_script_policy(self):
+        response=self.client.get('/');text=response.get_data(as_text=True)
+        names=('services.js','chat.js','uploads.js','app.js','studio.js','playlists.js')
+        self.assertEqual(sorted(names,key=lambda name:text.index('/static/'+name)),list(names))
+        self.assertIn("script-src 'self'",response.headers['Content-Security-Policy'])
+        self.assertNotIn('unsafe-inline',response.headers['Content-Security-Policy'])
+
     def test_srt_url_has_explicit_obs_options_and_separate_stream_id(self):
         data = self.client.get('/api/ingest').json
         parsed = urllib.parse.urlsplit(data['srt'])

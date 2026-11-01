@@ -72,7 +72,7 @@
         const status=await get('/api/uploads');
         if(row.state==='removed')return;
         if(status.busy){row.state='waiting';row.message='Eine vorherige Datei wird auf dem Server verarbeitet.';render();await delay(1000);continue;}
-        if(row.endpoint.includes('/playlists/')&&!window.StreamDeskServices.allowed('playlists'))throw new Error('Playlist-Uploads wurden durch die Administration gesperrt.');
+        if(row.endpoint.includes('/playlists/')&&!window.StreamDeskServices?.allowed('playlists'))throw new Error('Playlist-Uploads wurden durch die Administration gesperrt.');
         try{await send(row);break;}catch(error){if(error.busy){row.state='waiting';row.message=error.message;render();await delay(1200);continue;}throw error;}
       }
     }
