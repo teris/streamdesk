@@ -26,7 +26,7 @@
   function protocols() {
     const list = find('#protocol-status');list.replaceChildren();
     const rtc = document.createElement('p');
-    const active = window.StreamDeskServices.allowed('webrtc') && advanced.webrtc && advanced.webrtc_runtime !== false;
+    const active = window.StreamDeskServices?.allowed('webrtc') && advanced.webrtc && advanced.webrtc_runtime !== false;
     rtc.textContent = !advanced.webrtc ? 'WebRTC ist deaktiviert. Ein Administrator kann den Server im Formular darunter aktivieren.' : advanced.webrtc_runtime === false ? 'WebRTC ist konfiguriert, aber auf dem laufenden Server noch deaktiviert. Konfiguration erneut speichern und Status aktualisieren.' : `WebRTC ist aktiviert · UDP/ICE: ${advanced.webrtc_ice_address || 'nicht eingerichtet'}.`;
     list.append(rtc);
     const srt = document.createElement('p');

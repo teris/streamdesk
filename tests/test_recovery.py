@@ -224,18 +224,34 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(commands[-2:], [['systemctl', 'stop', 'streamdesk'], ['systemctl', 'start', 'streamdesk']])
         self.assertFalse(self.data.exists())
 
-    def workflow(self, mode, fail=False):
+    def test_without_backup_early_error_restarts_untouched_ui_and_preserves_files(self):
+        args=self.args();args.no_backup=True;old=installer.validate(args)
+        before={str(path):path.read_bytes() for path in self.root.rglob('*') if path.is_file()}
+        with patch.object(installer.subprocess,'run',return_value=subprocess.CompletedProcess([],0)) as run,patch.object(installer,'backup',side_effect=AssertionError('Backup must be skipped')),patch.object(installer,'dependencies',side_effect=RuntimeError('fixture-dependency-failure')),contextlib.redirect_stderr(io.StringIO()) as error:
+            with self.assertRaisesRegex(RuntimeError,'fixture-dependency-failure'):installer.install(args,old)
+        self.assertIn('kein Backup erstellt',error.getvalue());self.assertNotIn('NoneType',error.getvalue())
+        commands=[call.args[0] for call in run.call_args_list]
+        self.assertIn(['systemctl','start','streamdesk'],commands)
+        self.assertEqual(before,{str(path):path.read_bytes() for path in self.root.rglob('*') if path.is_file()})
+
+    def workflow(self, mode, fail=False, no_backup=False, recover=True, fail_ftp=False):
         self.data.mkdir()
         (self.data / 'orphan.mp4').write_bytes(b'fixture-existing-video')
         (self.data / 'fernet.key').write_bytes(b'fixture-existing-key')
+        (self.data / 'session.key').write_bytes(b'fixture-existing-session-key')
+        if not recover:
+            with sqlite3.connect(self.data/'app.db') as database:
+                database.execute('CREATE TABLE users(id INTEGER PRIMARY KEY,prefix TEXT)')
+                database.execute("INSERT INTO users(prefix) VALUES ('streamdesk/alice/')")
         self.app_dir.mkdir()
         (self.app_dir / 'app.py').write_text('fixture-old-application')
         (self.app_dir / 'venv/bin').mkdir(parents=True)
         for name in ('python', 'pip'):
             (self.app_dir / 'venv/bin' / name).write_text('fixture-runtime')
-        for name in ('streamdesk', 'mediamtx'):
+        for name in ('streamdesk', 'mediamtx','streamdesk-ftp','streamdesk-ftp-auth'):
             (self.units / (name + '.service')).write_text('fixture-old-' + name + '-unit')
-        args = self.args(mode)
+        (self.etc/'streamdesk-ftp.env').write_text('fixture-old-ftp-env')
+        args = self.args(mode,recover=recover);args.no_backup=no_backup
         old = installer.validate(args)
         original_env = self.env.read_bytes()
         original_config = self.media.read_bytes()
@@ -256,44 +272,84 @@ class RecoveryTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, 0)
 
         def wait(url, **_):
-            if fail and url.endswith('/login'):
+            if fail and not fail_ftp and url.endswith('/login'):
                 raise RuntimeError('fixture-failed-health-check')
 
-        with patch.object(installer, 'configure_ftp'), patch.object(installer, 'dependencies'), patch.object(installer, 'media_service_identity', return_value=(0, 0)), \
+        def configure_ftp(*_):
+            if fail_ftp:
+                (self.units/'streamdesk-ftp.service').write_text('fixture-updated-ftp-unit')
+                (self.etc/'streamdesk-ftp.env').write_text('fixture-updated-ftp-env')
+                raise RuntimeError('fixture-failed-ftp-setup')
+
+        real_backup=installer.backup
+        def chosen_backup(a):
+            self.assertFalse(no_backup,'Backup must not run when declined')
+            return real_backup(a)
+
+        with patch.object(installer,'backup',side_effect=chosen_backup),patch.object(installer, 'configure_ftp',side_effect=configure_ftp), patch.object(installer, 'dependencies'), patch.object(installer, 'media_service_identity', return_value=(0, 0)), \
              patch.object(installer, 'ensure_service_accounts', return_value=(
                  SimpleNamespace(pw_uid=1001, pw_gid=1001), SimpleNamespace(pw_uid=0, pw_gid=0), SimpleNamespace(pw_uid=1002, pw_gid=1002))), \
              patch.object(installer, 'media_config_permissions', return_value=(0o600, (0, 0))), \
              patch.object(installer.os, 'chown'), patch.object(installer.subprocess, 'run', side_effect=fake_run), \
              patch.object(installer, 'verify_media_profile', return_value='1.21.3'), \
              patch.object(installer, 'wait_url', side_effect=wait), contextlib.redirect_stdout(io.StringIO()), \
-             contextlib.redirect_stderr(io.StringIO()):
+             contextlib.redirect_stderr(io.StringIO()) as errors:
             if fail:
-                with self.assertRaisesRegex(RuntimeError, 'fixture-failed-health-check'):
+                with self.assertRaisesRegex(RuntimeError, 'fixture-failed-ftp-setup' if fail_ftp else 'fixture-failed-health-check'):
                     installer.install(args, old)
             else:
                 installer.install(args, old)
-        backup = next((self.root / 'backups').iterdir())
-        self.assertEqual((backup / 'fernet.key').read_bytes(), b'fixture-existing-key')
+        if no_backup:
+            self.assertFalse((self.root/'backups').exists())
+        else:
+            backup = next((self.root / 'backups').iterdir())
+            self.assertEqual((backup / 'fernet.key').read_bytes(), b'fixture-existing-key')
         self.assertEqual(self.binary.read_bytes(), b'fixture-existing-media-binary')
         self.assertEqual((self.units / 'mediamtx.service').read_text(), 'fixture-old-mediamtx-unit')
         self.assertFalse(any(command[:2] == ['systemctl', 'stop'] and command[-1] == 'mediamtx' for command, _ in calls))
         sync = [kwargs for command, kwargs in calls if '-c' in command and 'app.sync_media_runtime' in command[-1]]
-        self.assertEqual(set(json.loads(sync[0]['input'])), {'streamdesk/alice/source1', 'streamdesk/alice/output'})
-        if fail:
+        self.assertEqual(set(json.loads(sync[0]['input'])), {'streamdesk/alice/source1', 'streamdesk/alice/output'} if recover else set())
+        if no_backup and fail:
+            self.assertIn('nicht automatisch zurückgespielt',errors.getvalue())
+            self.assertIn('StreamDesk bleibt zur Prüfung gestoppt',errors.getvalue())
+            self.assertEqual((self.app_dir/'app.py').read_bytes(),(ROOT/'app.py').read_bytes())
+            self.assertTrue((self.data/'app.db').is_file())
+            if recover:
+                previous=next(self.root.glob('data-before-recovery-*'))
+                self.assertEqual((previous/'orphan.mp4').read_bytes(),b'fixture-existing-video')
+            else:
+                self.assertEqual((self.data/'orphan.mp4').read_bytes(),b'fixture-existing-video')
+                self.assertEqual((self.data/'fernet.key').read_bytes(),b'fixture-existing-key')
+            self.assertEqual([command for command,_ in calls if command==['systemctl','start','streamdesk']],[])
+            if fail_ftp:
+                self.assertEqual((self.units/'streamdesk-ftp.service').read_text(),'fixture-updated-ftp-unit')
+                self.assertEqual((self.etc/'streamdesk-ftp.env').read_text(),'fixture-updated-ftp-env')
+                for name in ('streamdesk-ftp','streamdesk-ftp-auth'):
+                    self.assertIn(['systemctl','stop',name],[command for command,_ in calls])
+        elif fail:
             self.assertEqual(self.media.read_bytes(), original_config)
             self.assertEqual(self.env.read_bytes(), original_env)
             self.assertEqual((self.data / 'orphan.mp4').read_bytes(), b'fixture-existing-video')
             self.assertEqual((self.data / 'fernet.key').read_bytes(), b'fixture-existing-key')
-            self.assertFalse((self.data / 'app.db').exists())
+            self.assertEqual((self.data / 'app.db').exists(),not recover)
             self.assertEqual((self.app_dir / 'app.py').read_text(), 'fixture-old-application')
+            self.assertEqual((self.units/'streamdesk-ftp.service').read_text(),'fixture-old-streamdesk-ftp-unit')
+            self.assertEqual((self.etc/'streamdesk-ftp.env').read_text(),'fixture-old-ftp-env')
         else:
             self.assertTrue((self.data / 'app.db').is_file())
-            self.assertTrue((self.data / 'initial-login.txt').is_file())
-            self.assertEqual((self.data / 'initial-login.txt').stat().st_mode & 0o777, 0o600)
-            previous = next(self.root.glob('data-before-recovery-*'))
-            self.assertEqual((previous / 'orphan.mp4').read_bytes(), b'fixture-existing-video')
-            self.assertEqual(yaml.safe_load(self.media.read_text())['paths'], {'camera': self.config['paths']['camera']})
-            self.assertTrue(json.loads((self.data / 'installation.json').read_text())['recovered'])
+            if recover:
+                self.assertTrue((self.data / 'initial-login.txt').is_file())
+                self.assertEqual((self.data / 'initial-login.txt').stat().st_mode & 0o777, 0o600)
+                previous = next(self.root.glob('data-before-recovery-*'))
+                self.assertEqual((previous / 'orphan.mp4').read_bytes(), b'fixture-existing-video')
+                self.assertEqual(yaml.safe_load(self.media.read_text())['paths'], {'camera': self.config['paths']['camera']})
+            else:
+                self.assertFalse((self.data/'initial-login.txt').exists())
+                self.assertEqual((self.data/'orphan.mp4').read_bytes(),b'fixture-existing-video')
+                self.assertEqual((self.data/'fernet.key').read_bytes(),b'fixture-existing-key')
+            marker=json.loads((self.data / 'installation.json').read_text())
+            self.assertEqual(marker['recovered'],recover)
+            self.assertEqual(marker['backup'] is None,no_backup)
 
     def test_attach_recovery_creates_new_login_and_keeps_existing_media_service(self):
         self.workflow('attach')
@@ -303,6 +359,24 @@ class RecoveryTests(unittest.TestCase):
 
     def test_failed_recovery_restores_original_files_and_orphaned_data(self):
         self.workflow('attach', fail=True)
+
+    def test_update_without_backup_succeeds_and_preserves_existing_media_and_keys(self):
+        self.workflow('update',no_backup=True,recover=False)
+
+    def test_failed_update_without_backup_leaves_existing_data_for_manual_repair(self):
+        self.workflow('update',fail=True,no_backup=True,recover=False)
+
+    def test_failed_ftp_setup_without_backup_does_not_delete_units_or_credentials(self):
+        self.workflow('update',fail=True,no_backup=True,recover=False,fail_ftp=True)
+
+    def test_failed_ftp_setup_with_backup_restores_previous_units_and_credentials(self):
+        self.workflow('update',fail=True,recover=False,fail_ftp=True)
+
+    def test_recovery_without_backup_still_preserves_orphaned_media(self):
+        self.workflow('attach',no_backup=True)
+
+    def test_failed_recovery_without_backup_keeps_both_data_directories(self):
+        self.workflow('attach',fail=True,no_backup=True)
 
 
 if __name__ == '__main__':

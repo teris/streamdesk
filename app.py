@@ -1,4 +1,5 @@
 import concurrent.futures
+from contextlib import contextmanager
 import functools
 import hashlib
 import hmac
@@ -115,10 +116,15 @@ def browser_fps():
         return 10
 
 
+@contextmanager
 def db():
     connection = sqlite3.connect(DATA / 'app.db', timeout=15)
     connection.row_factory = sqlite3.Row
-    return connection
+    try:
+        with connection:
+            yield connection
+    finally:
+        connection.close()
 
 
 def rows(sql, args=()):

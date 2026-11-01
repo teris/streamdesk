@@ -8,7 +8,7 @@
     find('#playback-download').hidden = true;
   }
   async function load(force=false){
-    if(!window.StreamDeskServices.allowed('playback')||!status?.expert_mode||loading||!force&&loaded)return;
+    if(!window.StreamDeskServices?.allowed('playback')||!status?.expert_mode||loading||!force&&loaded)return;
     loading=true;
     try{
       const playback=await api('/api/playback/status');if(!status?.expert_mode)return;

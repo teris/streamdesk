@@ -1,5 +1,22 @@
 # Änderungen
 
+## 2.0.2
+
+- Die bisherige gemeinsame Bestätigung für Backup, FTP und Update durch eine reine Backup-Wahl ersetzt: `Backup vor Installation/Update erstellen? [y/n]`. `y` erstellt die Sicherung; `n` setzt Installation oder Update ohne neue Sicherung fort und erklärt, dass dieser Lauf nicht zurückgespielt werden kann. Andere Antworten werden erneut abgefragt. Abbruch vor Änderungen ist weiterhin mit Strg+C möglich.
+- `--no-backup` für ausdrücklich gewünschte Läufe ohne Sicherung ergänzt. `--yes` und nicht interaktive Läufe behalten ohne diesen Schalter die Sicherung als Standard. Die FTP-Installationshinweise bleiben von der Backup-Wahl getrennt.
+- Fehlerpfad für Updates ohne Backup ergänzt: keine Wiederherstellung aus einem nicht vorhandenen Sicherungsordner, keine automatische Löschung von Konfiguration, Zugangsdaten, Zertifikaten oder Teilständen. Nach bereits erfolgten Anwendungsänderungen bleibt StreamDesk zur Prüfung gestoppt; bei Fehlern vor diesen Änderungen wird der zuvor laufende Dienst wieder gestartet. Mit Backup bleibt der bisherige Rollback erhalten.
+- Installation ohne Backup speichert `backup: null` im Installationsstatus. Beim ausdrücklichen Wiederaufsetzen bleiben vorhandene Datenreste auch ohne Backup in einem separaten Verzeichnis erhalten; ein Fehler lässt beide Datenstände zur manuellen Prüfung bestehen.
+- VERSION, README und Installations-/Betriebsdokumentation auf 2.0.2 aktualisiert. Zehn neue Tests prüfen y/n-Eingaben, ungültige Antworten, nicht interaktive Vorgaben sowie erfolgreiche und fehlgeschlagene Updates/Wiederaufsetzungen mit und ohne Sicherung einschließlich FTP-Fehlern. Alle 249 Unit-Tests bestehen; Python-/Shell-Syntax und das entpackte Update-Paket werden geprüft.
+
+## 2.0.1
+
+- Startfehler `StreamDeskServices is undefined` behoben. Die Dienstfreigaben werden vor ihren Verbrauchern geladen; verzögerte oder blockierte Skripte verursachen beim Navigieren keine Folgefehler mehr. Ein fehlendes Skript zeigt einen Hinweis zum erneuten Laden. Ungültige Freigabedaten werden gesperrt behandelt und beim nächsten gültigen Serverstatus wiederhergestellt.
+- Datenbankverbindungen werden nach jeder Verwendung ausdrücklich geschlossen, auch nach Fehlern. Bisher schloss der SQLite-Kontext nur die Transaktion ab; viele Verbindungen blieben bis zur späteren Speicherbereinigung offen. Transaktionen behalten Commit und Rollback. Eine lokale Prüfung mit deaktivierter Speicherbereinigung ergab zuvor 212 offene Datenbank-Dateideskriptoren nach fünf Statusabfragen, nach der Korrektur keinen zusätzlichen nach 100 Abfragen.
+- Gleichzeitige Status-, Medien- und FTP-Abfragen teilen sich eine laufende Anfrage. Langsame Antworten erzeugen keine Warteschlange wiederholter Medienabrufe mehr. Nach einer tatsächlichen Änderung folgt bei Bedarf genau eine neue Abfrage, damit gespeicherte Ordner und andere Änderungen trotzdem sofort erscheinen.
+- Unveränderte FTP-Daten bauen die Verbindungsfelder und Importliste nicht erneut auf. Verdeckte Tabs fragen den Status seltener ab und lösen keine zusätzlichen Medien-/FTP-Hintergrundabrufe aus; beim Zurückkehren wird der Status direkt aktualisiert.
+- Lesende JSON-Abfragen erhalten eine Wartefrist mit verständlichem Fehlerhinweis. Videoübertragungen und Umwandlungen behalten ihre unbegrenzte Gesamtdauer. Veralteten 501-MB-Hinweis bei Proxyfehlern berichtigt. Die Sicherheitsrichtlinie für Skripte bleibt unverändert ohne Freigabe von Inline-Code.
+- VERSION, Installation, README und Betriebs-/Testdokumentation auf 2.0.1 aktualisiert. 239 Unit-Tests, Firefox-/Chromium-Tests mit verzögerten und gesperrten Skripten, Abfrageüberschneidungen, fehlertoleranter Initialisierung und hängenden Antworten bestanden. Bestehende Tests für große Bibliotheken, Dienstfreigaben und persönliche FTP-Verwaltung bestehen ebenfalls.
+
 ## 2.0.0-rc6
 
 - Feste Größen- und Laufzeitgrenzen für MP4-Importe entfernt: Web und FTPS erlauben Videos unabhängig von Dateigröße und Länge, auch in der einfachen Offline-Videobibliothek. Die bisherigen 500 MB, 120 Minuten beziehungsweise fünf Minuten gelten nicht mehr. Upload und eigentliche Umwandlung besitzen kein festes Gesamtzeitlimit.

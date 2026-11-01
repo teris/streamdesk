@@ -1,4 +1,4 @@
-# Playlists und zeitgesteuerte Ausspielung · 2.0.0-rc6
+# Playlists und zeitgesteuerte Ausspielung · 2.0.2
 
 ## Medien getrennt verwalten
 

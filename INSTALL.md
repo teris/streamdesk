@@ -17,8 +17,8 @@ ZIP auf den Linux-Server übertragen und dort entpacken:
 ```bash
 apt-get update
 apt-get install -y unzip python3
-unzip streamdesk-2.0.0-rc6.zip
-cd streamdesk-2.0.0-rc6
+unzip streamdesk-2.0.2.zip
+cd streamdesk-2.0.2
 bash install.sh --help
 ```
 
@@ -115,6 +115,25 @@ Neues Release separat entpacken und darin ausführen:
 sudo bash install.sh --mode update
 ```
 
+Ab 2.0.2 lautet die interaktive Abfrage:
+
+```text
+Backup vor Installation/Update erstellen? [y/n]
+```
+
+- **y:** Sicherung erstellen und Installation/Update ausführen.
+- **n:** Ohne neue Sicherung fortfahren. Ein Hinweis erklärt, dass der vorherige Stand aus diesem Lauf nicht zurückgespielt werden kann.
+
+Nur `y` oder `n` werden akzeptiert, auch als Großbuchstaben. Andere Eingaben werden erneut abgefragt. Die Frage bestätigt ausschließlich die Backup-Wahl; sie ist keine gemeinsame Freigabe für FTP und Update mehr. Mit Strg+C kann der Aufruf vor Änderungen abgebrochen werden.
+
+Zum direkten Auslassen der Sicherung:
+
+```bash
+sudo bash install.sh --mode update --no-backup
+```
+
+`--yes` führt weiterhin ohne Rückfrage **mit Backup** aus. Auch nicht interaktive Aufrufe sichern standardmäßig; `--no-backup` schaltet dies ausdrücklich aus und zeigt den Hinweis ebenfalls. `--dry-run` erstellt keine Sicherung und verändert nichts. Die bereits vorhandenen Sicherungen bleiben erhalten.
+
 Bei abweichendem Dienstnamen `--service-name` angeben. Der Datenordner wird aus der vorhandenen Env-Datei übernommen. Ab 1.1.0-rc.2 wird auch der Programmordner gespeichert; bei älteren Installationen mit eigenem Programmordner diesen weiter ausdrücklich angeben. Beispiel:
 
 ```bash
@@ -148,12 +167,12 @@ sudo bash install.sh --mode attach --recover \
 Dabei geschieht Folgendes:
 
 1. Vorhandene Env-Werte und derselbe MediaMTX-Namensbereich werden übernommen. Abweichende Daten- oder MediaMTX-Konfigurationspfade werden abgelehnt, damit nicht versehentlich die falsche Instanz zurückgesetzt wird.
-2. Der UI-Dienst wird gestoppt; Konfiguration, Anwendung, Unit und vorhandene Schlüssel werden privat unter `/var/backups/streamdesk/` gesichert.
-3. Ein verbliebener Datenordner wird neben den bisherigen Pfad verschoben, beispielsweise nach `/var/lib/streamdesk-before-recovery-<zeitpunkt>-<kennung>`. Auch Medien, Schlüssel und SQLite-Journaldateien bleiben dort erhalten. Die Sicherung enthält eine `recovery.json` mit diesem Pfad. Große Dateien werden dafür nicht kopiert.
+2. Der UI-Dienst wird gestoppt. Bei gewähltem Backup werden Konfiguration, Anwendung, Unit und vorhandene Schlüssel privat unter `/var/backups/streamdesk/` gesichert.
+3. Ein verbliebener Datenordner wird neben den bisherigen Pfad verschoben, beispielsweise nach `/var/lib/streamdesk-before-recovery-<zeitpunkt>-<kennung>`. Auch Medien, Schlüssel und SQLite-Journaldateien bleiben dort erhalten. Bei gewähltem Backup enthält die Sicherung eine `recovery.json` mit diesem Pfad; der Pfad wird außerdem im Terminal ausgegeben. Große Dateien werden dafür nicht kopiert.
 4. Nachweisbar eigene verwaiste MediaMTX-Pfade und Konten werden entfernt und ein neuer StreamDesk-Administrator eingerichtet. Ohne passende Env-Datei müssen bestehende Pfade über ihre reservierten StreamDesk-Medienkonten zuordenbar sein; ein unbekannter belegter Namensbereich wird weiterhin abgelehnt.
 5. Neue Zugangsdaten werden ausschließlich in `/var/lib/streamdesk/initial-login.txt` abgelegt. MediaMTX-Binary, bestehende MediaMTX-Unit und fremde Streams/Konten werden nicht ersetzt. Der separate native Aufnahmebereich bleibt erhalten.
 
-Bei einem Installationsfehler werden vorherige Konfiguration und Datenreste wiederhergestellt. Ein späterer erneuter Aufruf mit vorhandener neuer Datenbank ist ein normales `--mode update`; `--recover` überschreibt diese Datenbank nicht.
+Bei einem Installationsfehler mit Backup werden vorherige Konfiguration und Datenreste wiederhergestellt. Ohne Backup erfolgt kein automatisches Zurückspielen; bereits angelegte und separat erhaltene Datenstände bleiben zur Prüfung bestehen. Ein späterer erneuter Aufruf mit vorhandener neuer Datenbank ist ein normales `--mode update`; `--recover` überschreibt diese Datenbank nicht.
 
 Nach erfolgreicher Neuinstallation:
 
@@ -189,7 +208,7 @@ Für Docker/Compose liegen `Dockerfile`, `.dockerignore`, `compose.yml` und `dep
 
 ## Fehler und Wiederherstellung
 
-Vor Änderungen entstehen private Sicherungen unter `/var/backups/streamdesk/`. Gesichert werden Konfiguration, App-Quellcode, Env-Datei sowie bei Updates die Datenbank und Verschlüsselungsschlüssel; große Mediendateien werden nicht kopiert. Bei einem Installationsfehler wird der vorherige Konfigurations-/Anwendungsstand wiederhergestellt. Die Sicherung bleibt zur Kontrolle erhalten. Systempakete und das Python-Environment werden dabei nicht automatisch zurückgesetzt; Hinweise dazu stehen im Betriebsleitfaden.
+Bei gewähltem Backup entstehen vor Änderungen private Sicherungen unter `/var/backups/streamdesk/`. Gesichert werden Konfiguration, App-Quellcode, Env-Datei sowie bei Updates die Datenbank und Verschlüsselungsschlüssel; große Mediendateien werden nicht kopiert. Bei einem Installationsfehler mit Backup wird der vorherige Konfigurations-/Anwendungsstand wiederhergestellt. Ohne Backup erfolgt keine automatische Wiederherstellung; Dateien und Teilstände bleiben erhalten. Nach bereits erfolgten Anwendungsänderungen bleibt der UI-Dienst zur Prüfung gestoppt. Die vorhandenen Sicherungen bleiben erhalten. Systempakete und das Python-Environment werden auch mit Backup nicht automatisch zurückgesetzt; Hinweise dazu stehen im Betriebsleitfaden.
 
 Logs und Wiederherstellungsschritte stehen in [docs/OPERATIONS.md](docs/OPERATIONS.md). Ein erneuter Neuinstallationsaufruf überschreibt keine vorhandene Datenbank.
 
@@ -200,7 +219,7 @@ Das normale `--mode update` erhält Benutzer, Schlüssel, Medien und tatsächlic
 
 ## FTPS ab 2.0.0-rc1
 
-Vor jeder Installation beziehungsweise Aktualisierung kündigt der Installer ausdrücklich die Pure-FTPd-Paketinstallation, die zusätzlichen Dienste und die benötigten Ports an. Dieser Hinweis erscheint vor der Bestätigung und auch bei `--yes` sowie `--dry-run`. Die Serveradresse entspricht immer `--ingest-host`. Ab rc6 weist der Installer auch auf Videoimporte ohne feste Größen-/Laufzeitgrenze und den erforderlichen Speicher für Original und Umwandlung hin.
+Vor jeder Installation beziehungsweise Aktualisierung kündigt der Installer ausdrücklich die Pure-FTPd-Paketinstallation, die zusätzlichen Dienste und die benötigten Ports an. Dieser Hinweis erscheint vor der Backup-Wahl und auch bei `--yes` sowie `--dry-run`. Die Serveradresse entspricht immer `--ingest-host`. Ab rc6 weist der Installer auch auf Videoimporte ohne feste Größen-/Laufzeitgrenze und den erforderlichen Speicher für Original und Umwandlung hin.
 
 Der native Installer richtet zusätzlich einen eigenen Pure-FTPd-Dienst für persönliche Video-Uploads ein. Standard: **explizites FTPS auf 2121/TCP**, passive Datenports **30000–30049/TCP**. Bestehende FTP-Dienste bleiben erhalten. Der Installer verbietet automatische Paketentfernungen; bei einem Konflikt mit einem anderen FTP-Server kann das Update mit `--disable-ftp` ausgeführt werden. Der HTTP-Reverse-Proxy leitet diese Ports nicht weiter; in Firewall/NAT gesondert freigeben.
 

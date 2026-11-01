@@ -6,6 +6,8 @@ let redirecting = false;
 function redirectToLogin() { if (!redirecting) { redirecting=true;location.assign('/login'); } }
 let state;
 let failures = 0;
+let refreshing = null;
+let statusReload = null;
 let toastTimer;
 let programPreviewWanted = true;
 let librarySignature = '';
@@ -149,17 +151,25 @@ async function api(path, body, method = 'POST') {
     if (body instanceof FormData) options.body = body;
     else { options.headers['Content-Type'] = 'application/json'; options.body = JSON.stringify(body); }
   }
+  const controller=body===undefined?new AbortController():null;
+  const deadline=controller?setTimeout(()=>controller.abort(),15000):null;
+  if(controller)options.signal=controller.signal;
+  try {
   const response = await fetch(path, options);
   if (response.status === 401) { redirectToLogin(); throw new Error('Bitte erneut anmelden.'); }
   if (response.status === 204) return {};
   let data;
   try { data = await response.json(); }
   catch (_) {
-    if (response.status === 413) throw new Error('Der Proxy hat den Upload abgewiesen. Das Upload-Limit in NPMplus muss mindestens 501 MB betragen.');
+    if (response.status === 413) throw new Error('Der Proxy hat den Upload abgewiesen. Für große Videos die Dateigrößenbegrenzung im Proxy aufheben (client_max_body_size 0).');
     throw new Error(`Die Anfrage wurde mit HTTP ${response.status} beantwortet. Verbindung und Proxy prüfen.`);
   }
   if (!response.ok) throw new Error(data.error || 'Die Aktion ist fehlgeschlagen.');
   return data;
+  } catch(error) {
+    if(controller?.signal.aborted)throw new Error('Der Server antwortet nicht rechtzeitig. Bitte erneut versuchen.');
+    throw error;
+  } finally {if(deadline!==null)clearTimeout(deadline);}
 }
 function render(data) {
   state = data;
@@ -173,7 +183,7 @@ function render(data) {
   $('#start').disabled = busy || !online || data.enabled || !data.output.configured || ['queued','processing'].includes(data.upload.state);
   $('#stop').disabled = busy || !online || !data.enabled;
   $('#upload-button').disabled = busy;
-  const metadataReady = window.StreamDeskServices.allowed('twitch') && !!data.twitch_edit_ready;
+  const metadataReady = window.StreamDeskServices?.allowed('twitch') && !!data.twitch_edit_ready;
   $('#save-channel').disabled = busy || !online || !metadataReady;
   $('#load-channel').disabled = busy || !online || !metadataReady;
   $('#metadata-connect').hidden = metadataReady;
@@ -220,13 +230,21 @@ function render(data) {
   if(data.upload.stage==='processing'&&data.upload.state==='processing'){$('#upload-meter').hidden=false;$('#upload-meter').value=data.upload.progress||0;$('#upload-state').textContent=(data.upload.filename||'Video')+' · Umwandlung: '+Math.round(data.upload.progress||0)+' %';}
   $('#updated').textContent = 'Aktualisiert ' + new Date().toLocaleTimeString('de-DE');
 }
-async function refresh() {
-  if (redirecting) return;
+function refresh(fresh=false) {
+  if (redirecting) return Promise.resolve();
+  if(refreshing){
+    if(!fresh)return refreshing;
+    if(!statusReload)statusReload=refreshing.then(()=>{statusReload=null;return refresh();});
+    return statusReload;
+  }
+  refreshing=(async()=>{
   try { const data = await api('/api/status'); failures = 0; render(data); await Promise.all([currentView==='videos'?loadLibrary():Promise.resolve(),currentView==='recordings'?loadRecordings():Promise.resolve(),currentView==='chat'||currentView==='dashboard'&&studioTab==='chat'?loadChat():Promise.resolve()]); }
   catch (error) {
     failures++;
     if (failures > 1 && state) render({...state,ok:false,error:'Verbindung zur Oberfläche unterbrochen. Status wird erneut geprüft.'});
   }
+  })().finally(()=>{refreshing=null;});
+  return refreshing;
 }
 function formFeedback(element, message, error = false) {
   if (!element) return;
@@ -252,7 +270,7 @@ async function action(callback, message, target = null) {
   try {
     await callback();
     if (message) { notify(message); formFeedback(target, message); }
-    if (!redirecting) await refresh();
+    if (!redirecting) await refresh(true);
   }
   catch(error) { notify(error.message,true); formFeedback(target, error.message, true); }
   finally {
@@ -369,7 +387,7 @@ async function loadLibrary(force = false) {
       const save=document.createElement('button');save.type='submit';save.className='secondary';save.textContent='Text-Version erstellen';save.disabled=['queued','processing'].includes(state?.upload?.state) || (selected&&!!state?.enabled);form.append(save);
       form.addEventListener('submit',event=>{event.preventDefault();action(async()=>{await api(`/api/videos/${video.id}/overlay`,{text:text.value,style:readStyle()});},'Text wird verarbeitet. Den Status findest du beim Upload.',form);});editor.append(form);card.append(editor);
       const browserEditor=document.createElement('details');const browserSummary=document.createElement('summary');browserSummary.textContent='Live-Browserquelle (z. B. StreamElements)';browserEditor.append(browserSummary);
-      const browserForm=document.createElement('form');browserForm.className='browser-form';browserForm.dataset.service='browser_overlays';browserForm.classList.toggle('service-disabled',!window.StreamDeskServices.allowed('browser_overlays'));const enableLabel=document.createElement('label');enableLabel.className='checkbox-label';enableLabel.textContent='Browser-Overlay beim Offline-Video einschalten';const enable=document.createElement('input');enable.type='checkbox';enable.checked=video.browser_enabled;enableLabel.append(enable);browserForm.append(enableLabel);
+      const browserForm=document.createElement('form');browserForm.className='browser-form';browserForm.dataset.service='browser_overlays';browserForm.classList.toggle('service-disabled',!window.StreamDeskServices?.allowed('browser_overlays'));const enableLabel=document.createElement('label');enableLabel.className='checkbox-label';enableLabel.textContent='Browser-Overlay beim Offline-Video einschalten';const enable=document.createElement('input');enable.type='checkbox';enable.checked=video.browser_enabled;enableLabel.append(enable);browserForm.append(enableLabel);
       const urlLabel=document.createElement('label');urlLabel.textContent='Öffentliche HTTPS-Overlay-Adresse';const url=document.createElement('input');url.type='text';url.spellcheck=false;url.autocomplete='off';url.placeholder=video.browser_enabled?`Gespeichert: ${video.browser_host} – leer lassen zum Beibehalten`:'https://streamelements.com/overlay/…';urlLabel.append(url);browserForm.append(urlLabel);
       const explanation=document.createElement('p');explanation.className='small muted';explanation.textContent=`Wird live transparent über das Video gemischt, inklusive Animationen und Alerts. Ton stammt vom Video. 1920 × 1080; Bildaktualisierung bis zu ${state?.limits?.browser_fps || 10} fps. Maximale Anzahl gleichzeitiger Browserquellen: ${state?.limits?.browser_limit || 1}.`;browserForm.append(explanation);
       const demo=document.createElement('button');demo.type='button';demo.className='ghost';demo.textContent='Test-Overlay-Adresse einsetzen';demo.addEventListener('click',()=>{const base=($('meta[name="public-url"]')?.content||state?.public_url||location.origin).replace(/\/$/,'');url.value=base+'/overlay-demo';enable.checked=true;});browserForm.append(demo);
@@ -599,4 +617,6 @@ if(notices[notice]) {
   history.replaceState(null,'',location.pathname+hash);
 }
 showView();
-(async function poll(){await refresh();setTimeout(poll,2000);})();
+if(!window.StreamDeskServices)notify('Die Oberfläche konnte nicht vollständig geladen werden. Bitte die Seite neu laden und gegebenenfalls blockierte Skripte prüfen.',true);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
+(async function poll(){await refresh();setTimeout(poll,document.hidden?15000:2000);})();

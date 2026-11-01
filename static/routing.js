@@ -82,7 +82,7 @@
     if(JSON.stringify([...record.options].map(option=>option.value))!==JSON.stringify(choices.map(row=>row[0]))){record.replaceChildren(...choices.map(row=>new Option(row[1],row[0])));record.value=choices.some(row=>row[0]===previous)?previous:'live';}
   }
   function render(data){status=data;sourceCards(data);program(data);if(!data.expert_mode){model=null;expertSignature='';find('#routing-source-editor').replaceChildren();}else if(location.hash.startsWith('#expert'))load();}
-  async function load(force=false){if(!window.StreamDeskServices.allowed('advanced_routing')||!status?.expert_mode||loading||model&&!force)return;loading=true;
+  async function load(force=false){if(!window.StreamDeskServices?.allowed('advanced_routing')||!status?.expert_mode||loading||model&&!force)return;loading=true;
     try{model=await api('/api/routing');if(!status.expert_mode)return;experts();
       find('#policy-healthy').value=model.policy.healthy_seconds;find('#policy-stall').value=model.policy.stall_seconds;find('#policy-retry').value=model.policy.retry_seconds;find('#policy-native-standby').checked=!!model.policy.native_standby;
     }catch(error){notify(error.message,true);}finally{loading=false;}}

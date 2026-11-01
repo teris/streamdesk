@@ -1,12 +1,15 @@
 'use strict';
 (() => {
   const meta=document.querySelector('meta[name=streamdesk-services]');
-  let flags=meta?JSON.parse(meta.content):{},adminLoading=false,loaded=false;
+  let flags={},adminLoading=false,loaded=false;
+  const valid=value=>value!==null&&typeof value==='object'&&!Array.isArray(value)&&Object.values(value).every(flag=>typeof flag==='boolean');
+  try{const value=JSON.parse(meta?.content||'null');if(!valid(value))throw new Error('Ungültige Dienstfreigaben.');flags=value;}
+  catch(_){console.warn('Dienstfreigaben werden mit dem nächsten Serverstatus erneut geladen.');}
   const routes={'administration-ftp':['ftp'],planner:['automation','playlists'],media:['playlists'],playlists:['playlists'],'expert-playlists':['playlists'],'settings-twitch':['twitch'],'settings-youtube':['youtube'],'settings-custom':['custom_outputs'],
     'expert-discord':['discord'],'expert-recording':['recording'],'expert-playback':['playback'],
     'expert-viewers':['viewers'],'expert-renewal':['automation'],'expert-routing':['advanced_routing'],
     'expert-outputs':['advanced_routing'],'expert-automation':['automation','notifications']};
-  const allowed=key=>flags[key]!==false;
+  const allowed=key=>flags[key]===true;
   const output=kind=>allowed(({twitch:'twitch',youtube:'youtube',custom:'custom_outputs'})[kind.split('-')[0]])&&(['twitch','youtube','custom'].includes(kind)||allowed('advanced_routing'));
   function view(name){return name==='planner'?['automation','playlists'].every(allowed):!routes[name]||routes[name].some(allowed);}
   function apply(){
@@ -27,7 +30,7 @@
   }
   async function loadAdmin(force=false){
     const list=document.querySelector('#admin-service-list');
-    if(!list||adminLoading||loaded&&!force)return;
+    if(!list||typeof api!=='function'||adminLoading||loaded&&!force)return;
     adminLoading=true;
     try{
       const data=await api('/api/admin/services');loaded=true;const wasLoaded=!!list.children.length,opened=new Set([...list.querySelectorAll('details[open]')].map(node=>node.dataset.group));list.replaceChildren();
@@ -55,8 +58,8 @@
   }
   window.StreamDeskServices={allowed,output,view,apply};
   window.addEventListener('streamdesk:status',event=>{
-    const next=event.detail.services||flags,changed=JSON.stringify(flags)!==JSON.stringify(next);flags=next;apply();
-    if(changed&&typeof showView==='function')showView();
+    const next=valid(event.detail.services)?event.detail.services:flags,changed=JSON.stringify(flags)!==JSON.stringify(next);flags=next;apply();
+    if(changed){window.dispatchEvent(new CustomEvent('streamdesk:services'));if(typeof showView==='function')showView();}
   });
   window.addEventListener('hashchange',()=>{apply();if(location.hash==='#administration-services')loadAdmin(true);});
   window.addEventListener('DOMContentLoaded',()=>{apply();if(location.hash==='#administration-services')loadAdmin();});

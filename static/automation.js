@@ -4,10 +4,10 @@
   let loaded=false,loading=false;
   const button=(text,callback)=>{const item=document.createElement('button');item.type='button';item.className='ghost';item.textContent=text;item.addEventListener('click',callback);return item;};
   async function load(){
-    const status=window.state;if(!status?.expert_mode||loading||!window.StreamDeskServices.view('expert-automation'))return;
+    const status=window.state;if(!status?.expert_mode||loading||!window.StreamDeskServices?.view('expert-automation'))return;
     loading=true;
     try{
-      const [data,notifications]=await Promise.all([window.StreamDeskServices.allowed('automation')?api('/api/automation'):Promise.resolve({available_hooks:[],hooks:[],jobs:[],export:{enabled:false,url:'',username:''}}),window.StreamDeskServices.allowed('notifications')?api('/api/notifications'):Promise.resolve({enabled:false,webhook:'',email:'',smtp_host:'',smtp_port:465,smtp_user:''})]);loaded=true;
+      const [data,notifications]=await Promise.all([window.StreamDeskServices?.allowed('automation')?api('/api/automation'):Promise.resolve({available_hooks:[],hooks:[],jobs:[],export:{enabled:false,url:'',username:''}}),window.StreamDeskServices?.allowed('notifications')?api('/api/notifications'):Promise.resolve({enabled:false,webhook:'',email:'',smtp_host:'',smtp_port:465,smtp_user:''})]);loaded=true;
       const actions=$('#automation-action');actions.replaceChildren(...data.available_hooks.map(name=>new Option(name,name)));
       const hooks=$('#automation-hooks');hooks.replaceChildren(...data.hooks.map(row=>{const line=document.createElement('p');line.textContent=`${row.event} → ${row.action_name} `;line.append(button('Entfernen',async()=>{await api('/api/automation/hooks/'+row.id,{},'DELETE');await load();}));return line;}));
       const jobs=$('#automation-jobs');jobs.replaceChildren(...data.jobs.map(row=>{const line=document.createElement('p');line.textContent=`${new Date(row.run_at*1000).toLocaleString()} · ${row.kind} · ${row.status} `;if(row.status==='pending')line.append(button('Abbrechen',async()=>{await api('/api/automation/jobs/'+row.id,{},'DELETE');await load();}));return line;}));

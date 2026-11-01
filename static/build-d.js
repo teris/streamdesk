@@ -5,7 +5,7 @@
   const encode = value => btoa(String.fromCharCode(...new Uint8Array(value))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 
   async function scenes() {
-    if(!window.StreamDeskServices.allowed('advanced_routing'))return;
+    if(!window.StreamDeskServices?.allowed('advanced_routing'))return;
     const data = await api('/api/scenes'), list = q('#scene-list');
     list.replaceChildren();
     for (const scene of data.scenes) {

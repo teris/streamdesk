@@ -1,8 +1,24 @@
-# Prüfbericht: StreamDesk 2.0.0-rc6
+# Prüfbericht: StreamDesk 2.0.2
 
 Die Unit-Tests sind für Linux ausgelegt; insbesondere verwenden Anwendung und Installer das POSIX-Modul `pwd`. Reine Windows-Python-Läufe sind daher kein unterstützter Testpfad.
 
 Die Unit- und Browsertests fixieren ausschließlich die Signierzeit ihrer Testsitzungen, damit rückwärts korrigierte Uhren auf dem Testhost keine zufälligen Abmeldungen auslösen. Die Sitzungsprüfung der Anwendung bleibt unverändert.
+
+## Optionale Installer-Sicherung in 2.0.2
+
+Prüfdatum: **1. November 2026**. Alle **249 Unit-Tests** bestehen, darunter die gezielten Installer- und Wiederherstellungstests mit je 24 Fällen. Zehn neue Fälle prüfen die reine `y/n`-Backup-Wahl, wiederholte Fragen bei anderen Eingaben, die Fortsetzung von `main()` bei `n`, Sicherung als nicht interaktiven Standard und ausdrücklich gewählte Läufe mit `--no-backup`.
+
+Die vollständigen Installer-Abläufe verwenden temporäre Daten-, Programm-, Konfigurations-, Sicherungs- und Unit-Verzeichnisse. Systembefehle, Paketinstallation und MediaMTX-Antworten werden simuliert. Erfolgreiche Updates ohne Backup erhalten vorhandene Daten und Schlüssel und speichern `backup: null`. Fehler nach bereits erfolgten Änderungen bleiben ohne Backup zur Prüfung stehen; sie überschreiben keine Dateien aus einer nicht vorhandenen Sicherung und erhalten auch FTP-Units/Zugangsdateien. Fehler vor Anwendungsänderungen starten den vorher aktiven Dienst wieder. Mit Backup werden vorige Dateien einschließlich FTP-Konfiguration zurückgespielt. Wiederaufsetzen erhält alte Datenreste in beiden Varianten, bei fehlgeschlagenem Lauf ohne Backup bleiben beide Datenverzeichnisse bestehen. Es wurden keine produktiven Dienste oder Konten verändert.
+
+## Bugfix für Start und längere UI-Nutzung in 2.0.1
+
+Prüfdatum: **1. November 2026**. 239 Unit-Tests bestehen. Neue Fälle prüfen das Schließen von Datenbankverbindungen nach Commit und Rollback, unveränderte Transaktionsdaten, wiederholte Statusabrufe bei abgeschalteter automatischer Speicherbereinigung sowie die Skriptreihenfolge unter unverändert strenger Content-Security-Policy.
+
+Der gemeldete Frontendfehler wurde gegen den bisherigen Stand `842d075` gezielt nachgestellt: Bei verzögertem Laden von `services.js` und Navigation während des Starts entstanden vier Fehler zu `undefined` und `allowed`. `tests/ui_resilience_smoke.py` besteht mit der Korrektur unter **Chromium 156 und Firefox 157**. Die Prüfung verzögert oder sperrt das Dienstskript, simuliert ungültige Freigabedaten und deren Wiederherstellung durch den Serverstatus, hält Antworten zurück und löst jeweils 20 Medien-/Statusaktualisierungen aus. Es entsteht jeweils nur eine laufende Anfrage; Änderungen während einer älteren Abfrage erhalten eine frische Antwort. Weitere Fälle prüfen einzelne FTP-Abfragen, erhaltene Eingabefelder, inaktive Tabs und den Abbruch hängender Leseabfragen. Keine unbehandelten Seitenfehler bleiben übrig. Die Tests verändern keine Browser-Sicherheitsrichtlinie und sprechen keine öffentlichen Streamingkonten an.
+
+Die Ressourcenmessung mit deaktivierter Speicherbereinigung zeigte vor der Korrektur **212 zusätzlich offene Datenbank-Dateideskriptoren nach fünf Statusabrufen**. Nach der Korrektur blieben nach **100 Statusabrufen null zusätzliche** offen; diese Messung dauerte lokal ungefähr 2,4 Sekunden. Dies ist ein wiederholter Belastungstest und kein mehrtägiger Dauerlauf auf dem produktiven Server.
+
+Die bestehenden Browserprüfungen für Dienstfreigaben mit zwei Sitzungen, Benutzerrechte, Sperren/Wiederfreigaben und Mobilansichten sowie die FTP-Verwaltung einschließlich Importfortschritt/Wiederholung bestehen. Der große Bibliothekstest mit 100 Ordnern, 602 Videos und 50 Playlists besteht erneut; ein Unterordner öffnete lokal in 0,15 Sekunden. Playlist-Bearbeitung, Löschung, Entwurfserhalt, Auswahl und Seitenaufteilung funktionieren weiter. Die folgenden Abschnitte dokumentieren frühere Release-Prüfungen; eine erneute vollständige Medienausspielung und ein mehrtägiger Serverlauf waren nicht Teil dieser UI-Korrektur. Die Bestätigung nach dem Update auf dem Benutzer-Server steht aus.
 
 ## Videoimporte ohne feste Datei-/Laufzeitgrenze in rc6
 

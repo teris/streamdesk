@@ -146,6 +146,7 @@ def parse(argv=None):
     p.add_argument('--admin-user', default='admin')
     p.add_argument('--admin-password-file', help='Root-private Datei mit dem initialen Passwort; sonst zufällig erzeugt')
     p.add_argument('--backup-dir', default='/var/backups/streamdesk')
+    p.add_argument('--no-backup', action='store_true', help='Ohne neue Sicherung fortfahren; kein automatisches Zurückspielen bei Fehlern möglich')
     p.add_argument('--skip-system-packages', action='store_true', help='Nur wenn Debian-Systemabhängigkeiten bereits vorhanden sind')
     p.add_argument('--yes', action='store_true', help='Nicht interaktiv; öffentliche Adresse und Ingest-Host müssen angegeben sein')
     p.add_argument('--dry-run', action='store_true', help='Plan und Konfigurationsprüfung ohne Änderungen')
@@ -545,9 +546,10 @@ def quarantine_recovery_data(a, folder):
     if a.data_dir.exists():
         stamp = datetime.datetime.now().strftime('%Y%m%d-%H%M%S') + '-' + secrets.token_hex(3)
         previous = a.data_dir.with_name(a.data_dir.name + '-before-recovery-' + stamp)
-    write_private(folder / 'recovery.json', json.dumps({'data_dir': str(a.data_dir),
-                  'previous_data_dir': str(previous) if previous else None,
-                  'obsolete_paths': getattr(a, 'recovery_paths', [])}, indent=2) + '\n')
+    if folder is not None:
+        write_private(folder / 'recovery.json', json.dumps({'data_dir': str(a.data_dir),
+                      'previous_data_dir': str(previous) if previous else None,
+                      'obsolete_paths': getattr(a, 'recovery_paths', [])}, indent=2) + '\n')
     if previous:
         a.data_dir.rename(previous)
         print('Bisherige Datenreste bleiben erhalten unter: ' + str(previous), flush=True)
@@ -807,12 +809,13 @@ def install(a, old):
             # Also cancel a failed/auto-restarting service before inspecting its data.
             subprocess.run(['systemctl', 'stop', a.service_name], check=False,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        folder = backup(a)
+        folder = None if a.no_backup else backup(a)
     except Exception:
         if before_active:
             subprocess.run(['systemctl', 'start', a.service_name], check=False)
         raise
-    print('Sicherung (ohne Medienkopien): ' + str(folder), flush=True)
+    if folder is not None:
+        print('Sicherung (ohne Medienkopien): ' + str(folder), flush=True)
     config_changed = False
     ui_touched = False
     data_existed = a.data_dir.exists()
@@ -958,7 +961,7 @@ def install(a, old):
         ftp_touched=True
         configure_ftp(a,ui_identity)
         marker = {'version': VERSION, 'mode': a.mode, 'recovered': a.recover, 'namespace': a.namespace,
-                  'backup': str(folder), 'media_config': str(a.mediamtx_config),
+                  'backup': str(folder) if folder is not None else None, 'media_config': str(a.mediamtx_config),
                   'mediamtx_major': a.mediamtx_major,
                   'mediamtx_version': getattr(a, 'detected_media_version', MEDIA_VERSION)}
         write_private(a.data_dir / 'installation.json', json.dumps(marker, indent=2) + '\n')
@@ -972,6 +975,18 @@ def install(a, old):
             print('Neue StreamDesk-Instanz eingerichtet. Frühere Konten und Verbindungen wurden nicht wiederhergestellt.')
         print('Es wurde kein Twitch-/YouTube-Stream gestartet.')
     except Exception:
+        if folder is None:
+            print('Installation/Update fehlgeschlagen. Es wurde kein Backup erstellt; der vorherige Stand kann nicht automatisch zurückgespielt werden. Änderungen bleiben zur Prüfung erhalten.',file=sys.stderr)
+            if ui_touched:
+                subprocess.run(['systemctl','stop',a.service_name],check=False)
+                print('StreamDesk bleibt zur Prüfung gestoppt.',file=sys.stderr)
+            elif before_active:
+                subprocess.run(['systemctl','start',a.service_name],check=False)
+            if ftp_touched:
+                for name in (a.service_name+'-ftp',a.service_name+'-ftp-auth'):
+                    subprocess.run(['systemctl','stop',name],check=False,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+            subprocess.run(['systemctl','daemon-reload'],check=False)
+            raise
         print('Installation fehlgeschlagen. Vorhandene Konfiguration wird wiederhergestellt.', file=sys.stderr)
         if ui_touched:
             subprocess.run(['systemctl', 'stop', a.service_name], check=False)
@@ -1053,6 +1068,18 @@ def ftp_install_notice(a):
             'Diese Ports müssen direkt erreichbar sein. Mit --disable-ftp kann die FTP-Einrichtung ausgelassen werden.')
 
 
+def choose_backup(a):
+    if not a.no_backup and not a.yes and sys.stdin.isatty():
+        while True:
+            answer=input('Backup vor Installation/Update erstellen? [y/n] ').strip().lower()
+            if answer in ('y','n'):
+                a.no_backup=answer=='n'
+                break
+            print('Bitte nur y oder n eingeben.')
+    if a.no_backup:
+        print('HINWEIS: Es wird kein Backup erstellt. Installation/Update wird fortgesetzt; der vorherige Stand kann bei einem Fehler nicht aus diesem Lauf zurückgespielt werden.',flush=True)
+
+
 def main(argv=None):
     if sys.version_info < (3, 11):
         raise RuntimeError('Python 3.11 oder neuer wird benötigt.')
@@ -1062,7 +1089,7 @@ def main(argv=None):
           + '\nMediaMTX-Zielprofil: ' + str(a.mediamtx_major) + '\nPrivater Medien-Namensbereich: ' + a.namespace + '/')
     print(ftp_install_notice(a),flush=True)
     if a.recover:
-        print('Wiederaufsetzen: neue Datenbank und neue Zugangsdaten; bisherige Datenreste und Konfiguration werden gesichert.')
+        print('Wiederaufsetzen: neue Datenbank und neue Zugangsdaten; bisherige Datenreste bleiben separat erhalten. Die vollständige Sicherung ist optional.')
     if a.dry_run:
         if a.mode != 'standalone':
             import yaml
@@ -1080,11 +1107,7 @@ def main(argv=None):
     os_release = dict(line.strip().split('=', 1) for line in Path('/etc/os-release').read_text().splitlines() if '=' in line)
     if os_release.get('ID', '').strip('"') != 'debian' or os_release.get('VERSION_ID', '').strip('"').split('.')[0] not in ('12', '13'):
         raise RuntimeError('Dieser Installer unterstützt Debian 12 und 13. Andere Systeme benötigen eine manuelle Installation.')
-    if not a.yes and sys.stdin.isatty():
-        question='Konfiguration sichern und Installation ausführen? [ja/NEIN] ' if a.disable_ftp else 'Konfiguration sichern, Pure-FTPd einrichten und Installation/Update ausführen? [ja/NEIN] '
-        if input(question).strip().lower() != 'ja':
-            print('Abgebrochen.')
-            return
+    choose_backup(a)
     install(a, old)
 
 
